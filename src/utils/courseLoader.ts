@@ -3,6 +3,8 @@ import type {
   AppBackupBundle,
   CustomSubjectPackage,
   CustomSubjectProgress,
+  EducationLevelId,
+  UserProfile,
 } from '../types/courses';
 import { MEDIA_EXT_RE, type AudioCandidateItem } from './audioMatcher';
 
@@ -13,6 +15,9 @@ export interface CatalogCourseEntry {
   version?: string;
   category?: string;
   url: string;
+  localPath?: string;
+  educationLevels?: EducationLevelId[];
+  grades?: string[];
 }
 
 export interface LocalLoadResult {
@@ -218,17 +223,197 @@ export async function fetchCoursesFromUrl(targetUrl: string): Promise<{
 }
 
 export async function fetchCatalogFromUrl(catalogUrl: string): Promise<CatalogCourseEntry[]> {
-  const res = await fetch(catalogUrl.trim(), { cache: 'no-store' });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = await res.json();
-  const rawList = Array.isArray(json) ? json : json?.courses;
-  if (!Array.isArray(rawList)) {
-    throw new Error('Invalid catalog format');
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(), 8000) : null;
+  try {
+    const res = await fetch(catalogUrl.trim(), {
+      cache: 'no-store',
+      signal: controller?.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const rawList = Array.isArray(json) ? json : json?.courses;
+    if (!Array.isArray(rawList)) {
+      throw new Error('Invalid catalog format');
+    }
+    return rawList.filter(
+      (c): c is CatalogCourseEntry =>
+        Boolean(c && typeof c.title === 'string' && typeof c.url === 'string')
+    );
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
   }
-  return rawList.filter(
-    (c): c is CatalogCourseEntry =>
-      Boolean(c && typeof c.title === 'string' && typeof c.url === 'string')
-  );
+}
+
+export const DEFAULT_GITHUB_CATALOG_URL = 'https://ha1358.github.io/amoozeshyar/catalog.json';
+
+export const BUILTIN_COURSE_CATALOG: CatalogCourseEntry[] = [
+  {
+    id: 'math_grade8_complete',
+    title: 'ریاضی پایه هشتم (کامل)',
+    subtitle: '۹ فصل کامل همراه با درسنامه رنگی، آزمایشگاه تعاملی، فرمول‌ها، تمرین و آزمون',
+    version: '2.3.3',
+    category: 'math',
+    educationLevels: ['middle'],
+    grades: ['پایه هشتم'],
+    localPath: 'courses/math8.json',
+    url: 'https://ha1358.github.io/amoozeshyar/courses/math8.json',
+  },
+  {
+    id: 'english_aef1_v3',
+    title: 'زبان انگلیسی (American English File 1)',
+    subtitle: '۱۲ فصل، ۴۸ درس، ۷۲۰ تمرین تعاملی و آزمون‌ها',
+    version: '3.0.0',
+    category: 'english',
+    educationLevels: ['other'],
+    grades: ['مقدماتی (A1–A2)', 'متوسط (B1–B2)', 'سطح عمومی'],
+    localPath: 'courses/aef1-v3.json',
+    url: 'https://ha1358.github.io/amoozeshyar/courses/aef1-v3.json',
+  },
+];
+
+function normalizeMatchText(s: string): string {
+  return s
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/[–—−]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function matchCatalogEntriesForProfile(
+  entries: CatalogCourseEntry[],
+  profile: Pick<UserProfile, 'educationLevel' | 'grade'>
+): CatalogCourseEntry[] {
+  if (!profile.educationLevel || !profile.grade.trim()) return [];
+  const normGrade = normalizeMatchText(profile.grade);
+  return entries.filter((entry) => {
+    if (!Array.isArray(entry.educationLevels) || entry.educationLevels.length === 0) {
+      return false;
+    }
+    if (!entry.educationLevels.includes(profile.educationLevel as EducationLevelId)) {
+      return false;
+    }
+    if (!Array.isArray(entry.grades) || entry.grades.length === 0) {
+      return true;
+    }
+    return entry.grades.some((g) => {
+      const ng = normalizeMatchText(g);
+      return ng === '*' || ng === normGrade;
+    });
+  });
+}
+
+export async function loadAvailableCourseCatalog(preferredUrl?: string): Promise<CatalogCourseEntry[]> {
+  const isFileProto = typeof window !== 'undefined' && window.location.protocol === 'file:';
+  const isOnline = typeof navigator === 'undefined' ? true : navigator.onLine;
+  const targetRemote = (preferredUrl || DEFAULT_GITHUB_CATALOG_URL).trim();
+
+  if (isOnline && targetRemote) {
+    try {
+      const remoteEntries = await fetchCatalogFromUrl(targetRemote);
+      if (remoteEntries.length > 0) return remoteEntries;
+    } catch {
+      // Fallback to local catalog or built-in list
+    }
+  }
+
+  if (!isFileProto) {
+    try {
+      const baseUrl = import.meta.env.BASE_URL || '/';
+      const localCatalogUrl = `${baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`}catalog.json`;
+      const localEntries = await fetchCatalogFromUrl(localCatalogUrl);
+      if (localEntries.length > 0) return localEntries;
+    } catch {
+      // Fallback to built-in catalog
+    }
+  }
+
+  return BUILTIN_COURSE_CATALOG;
+}
+
+export async function autoLoadCoursesForProfile(
+  profile: UserProfile,
+  existingCourses: CustomSubjectPackage[],
+  options?: { catalogUrl?: string }
+): Promise<{
+  matchedEntries: CatalogCourseEntry[];
+  loadedCourses: CustomSubjectPackage[];
+  audioCandidates: AudioCandidateItem[];
+  alreadyInstalledTitles: string[];
+  failedTitles: string[];
+}> {
+  const catalog = await loadAvailableCourseCatalog(options?.catalogUrl);
+  const matchedEntries = matchCatalogEntriesForProfile(catalog, profile);
+
+  if (matchedEntries.length === 0) {
+    return {
+      matchedEntries: [],
+      loadedCourses: [],
+      audioCandidates: [],
+      alreadyInstalledTitles: [],
+      failedTitles: [],
+    };
+  }
+
+  const isFileProto = typeof window !== 'undefined' && window.location.protocol === 'file:';
+  const isOnline = typeof navigator === 'undefined' ? true : navigator.onLine;
+  const baseUrl = import.meta.env.BASE_URL || '/';
+  const normalizedBase = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+
+  const loadedCourses: CustomSubjectPackage[] = [];
+  const audioCandidates: AudioCandidateItem[] = [];
+  const alreadyInstalledTitles: string[] = [];
+  const failedTitles: string[] = [];
+
+  for (const entry of matchedEntries) {
+    const existing = existingCourses.find((c) => c.id === entry.id);
+    if (existing && (!entry.version || existing.version === entry.version)) {
+      alreadyInstalledTitles.push(existing.title || entry.title);
+      continue;
+    }
+
+    let fetched = false;
+    const candidateUrls: string[] = [];
+    if (!isFileProto && entry.localPath) {
+      const localUrl = `${normalizedBase}${entry.localPath.replace(/^\/+/, '')}`;
+      if (isOnline && entry.url) {
+        candidateUrls.push(entry.url, localUrl);
+      } else {
+        candidateUrls.push(localUrl, entry.url);
+      }
+    } else if (entry.url) {
+      candidateUrls.push(entry.url);
+    }
+
+    for (const candidate of candidateUrls) {
+      if (!candidate) continue;
+      if (candidate.startsWith('http') && !isOnline) continue;
+      try {
+        const res = await fetchCoursesFromUrl(candidate);
+        if (res.courses.length > 0) {
+          loadedCourses.push(...res.courses);
+          audioCandidates.push(...res.audioCandidates);
+          fetched = true;
+          break;
+        }
+      } catch {
+        // Try next candidate
+      }
+    }
+
+    if (!fetched) {
+      failedTitles.push(entry.title);
+    }
+  }
+
+  return {
+    matchedEntries,
+    loadedCourses,
+    audioCandidates,
+    alreadyInstalledTitles,
+    failedTitles,
+  };
 }
 
 /**

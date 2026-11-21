@@ -39,6 +39,7 @@ import {
   saveAudioTracksToDB,
 } from './utils/audioStorage';
 import {
+  autoLoadCoursesForProfile,
   hasAudioSupport,
   isMathCourse,
   mergeCoursesPreservingMetadata,
@@ -989,9 +990,9 @@ export default function App() {
                 به آموزش یار خوش آمدید
               </h1>
               <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                هیچ درس پیش‌فرضی در برنامه قرار داده نشده است. می‌توانید بسته دروس مورد نظر خود را از{' '}
+                کافی است پروفایل خود را تکمیل کنید تا دروس متناسب با مقطع و پایه تحصیلی شما به‌صورت خودکار بارگذاری شوند؛ همچنین می‌توانید بسته‌های درسی دلخواه را از{' '}
                 <strong>مسیر محلی</strong> (فایل JSON، ZIP یا پوشه انگلیسی مانند{' '}
-                <code dir="ltr">courses/</code>) یا از <strong>آدرس اینترنتی</strong> بارگذاری و در آینده با حفظ داده‌های قبلی بروزرسانی کنید.
+                <code dir="ltr">courses/</code>) یا از <strong>آدرس اینترنتی</strong> اضافه و در آینده با حفظ داده‌های قبلی بروزرسانی کنید.
               </p>
             </div>
 
@@ -1134,9 +1135,55 @@ export default function App() {
         open={activeModal === 'profile'}
         onClose={() => setActiveModal(null)}
         profile={userProfile}
-        onSaveProfile={(next) => {
+        onSaveProfile={async (next, opts) => {
           setUserProfile(next);
-          showToastMsg(true, `پروفایل «${next.fullName}» با موفقیت ذخیره شد.`);
+          const shouldAutoLoad = opts?.autoLoadCourses !== false;
+          if (!shouldAutoLoad) {
+            showToastMsg(true, `پروفایل «${next.fullName}» با موفقیت ذخیره شد.`);
+            setActiveModal(null);
+            return;
+          }
+
+          let preferredCatalogUrl = '';
+          try {
+            preferredCatalogUrl = localStorage.getItem(CATALOG_URL_KEY) || '';
+          } catch {
+            // Ignore
+          }
+
+          const autoRes = await autoLoadCoursesForProfile(next, courses, {
+            catalogUrl: preferredCatalogUrl || undefined,
+          });
+
+          if (autoRes.loadedCourses.length > 0) {
+            await handleLoadedCourses(autoRes.loadedCourses, autoRes.audioCandidates);
+            const titles = autoRes.loadedCourses.map((c) => c.title).join('، ');
+            showToastMsg(
+              true,
+              `پروفایل «${next.fullName}» ذخیره شد و ${toPersianDigits(
+                autoRes.loadedCourses.length
+              )} درس (${titles}) به‌صورت خودکار بارگذاری گردید.`
+            );
+          } else if (
+            autoRes.alreadyInstalledTitles.length > 0 &&
+            autoRes.failedTitles.length === 0
+          ) {
+            showToastMsg(
+              true,
+              `پروفایل «${next.fullName}» ذخیره شد. دروس این مقطع و پایه (${autoRes.alreadyInstalledTitles.join('، ')}) از قبل در برنامه نصب هستند.`
+            );
+          } else if (autoRes.failedTitles.length > 0) {
+            showToastMsg(
+              false,
+              `پروفایل «${next.fullName}» ذخیره شد، اما دریافت خودکار (${autoRes.failedTitles.join('، ')}) ناموفق بود. اتصال اینترنت را بررسی کرده یا درس را دستی اضافه کنید.`
+            );
+          } else {
+            showToastMsg(
+              true,
+              `پروفایل «${next.fullName}» ذخیره شد. برای این مقطع و پایه هنوز بسته خودکاری ثبت نشده است؛ می‌توانید از مسیر محلی یا اینترنتی درس اضافه کنید.`
+            );
+          }
+          setActiveModal(null);
         }}
         onClearProfile={() => {
           setUserProfile(EMPTY_USER_PROFILE);

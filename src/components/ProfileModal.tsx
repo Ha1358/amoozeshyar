@@ -8,8 +8,16 @@ import {
   CheckCircle2,
   AlertCircle,
   Trash2,
+  BookOpen,
+  RefreshCw,
 } from 'lucide-react';
 import type { EducationLevelId, UserProfile } from '../types/courses';
+import {
+  BUILTIN_COURSE_CATALOG,
+  loadAvailableCourseCatalog,
+  matchCatalogEntriesForProfile,
+  type CatalogCourseEntry,
+} from '../utils/courseLoader';
 import { normalizeNum, toPersianDigits } from '../utils/mathHelpers';
 
 export interface EducationLevelOption {
@@ -119,7 +127,10 @@ export function ProfileModal({
   open: boolean;
   onClose: () => void;
   profile: UserProfile;
-  onSaveProfile: (next: UserProfile) => void;
+  onSaveProfile: (
+    next: UserProfile,
+    options?: { autoLoadCourses: boolean }
+  ) => void | Promise<void>;
   onClearProfile: () => void;
 }) {
   const [fullName, setFullName] = useState(profile.fullName);
@@ -130,6 +141,11 @@ export function ProfileModal({
   const [grade, setGrade] = useState(profile.grade);
   const [customGrade, setCustomGrade] = useState('');
   const [useCustomGrade, setUseCustomGrade] = useState(false);
+  const [autoLoadCourses, setAutoLoadCourses] = useState(true);
+  const [catalogEntries, setCatalogEntries] = useState<CatalogCourseEntry[]>(
+    BUILTIN_COURSE_CATALOG
+  );
+  const [saving, setSaving] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState(false);
@@ -154,16 +170,33 @@ export function ProfileModal({
     setErrorMsg(null);
     setSavedNotice(false);
     setConfirmClear(false);
+    setSaving(false);
+
+    let active = true;
+    let preferredUrl = '';
+    try {
+      preferredUrl = localStorage.getItem('amoozeshyar_catalog_url_v1') || '';
+    } catch {
+      // Ignore
+    }
+    loadAvailableCourseCatalog(preferredUrl || undefined).then((entries) => {
+      if (active && entries.length > 0) {
+        setCatalogEntries(entries);
+      }
+    });
+    return () => {
+      active = false;
+    };
   }, [open, profile]);
 
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !saving) onClose();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+  }, [open, onClose, saving]);
 
   if (!open) return null;
 
@@ -200,8 +233,9 @@ export function ProfileModal({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
     setErrorMsg(null);
     setSavedNotice(false);
 
@@ -228,18 +262,30 @@ export function ProfileModal({
       return;
     }
 
-    onSaveProfile({
-      fullName: cleanName,
-      mobile: normalizedMobile,
-      educationLevel,
-      grade: resolvedGrade,
-      updatedAt: Date.now(),
-    });
-    setSavedNotice(true);
+    setSaving(true);
+    try {
+      await onSaveProfile(
+        {
+          fullName: cleanName,
+          mobile: normalizedMobile,
+          educationLevel,
+          grade: resolvedGrade,
+          updatedAt: Date.now(),
+        },
+        { autoLoadCourses }
+      );
+      setSavedNotice(true);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const previewLevelLabel = getEducationLevelLabel(educationLevel);
   const previewGrade = useCustomGrade ? customGrade.trim() : grade.trim();
+  const matchedCourses = matchCatalogEntriesForProfile(catalogEntries, {
+    educationLevel,
+    grade: previewGrade,
+  });
 
   return (
     <div
@@ -424,6 +470,36 @@ export function ProfileModal({
             </div>
           )}
 
+          {/* Automatic Course Loading Preview */}
+          {educationLevel && previewGrade && (
+            <div className="p-3.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 space-y-2">
+              <label className="flex items-center gap-2 text-xs sm:text-sm font-bold text-indigo-900 dark:text-indigo-200 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={autoLoadCourses}
+                  disabled={saving}
+                  onChange={(e) => setAutoLoadCourses(e.target.checked)}
+                  className="w-4 h-4 rounded accent-indigo-600"
+                />
+                <span>بارگیری خودکار دروس متناسب با مقطع و پایه پس از ذخیره پروفایل</span>
+              </label>
+
+              {matchedCourses.length > 0 ? (
+                <div className="text-xs text-indigo-800 dark:text-indigo-300 flex items-start gap-2 pt-0.5">
+                  <BookOpen className="w-4 h-4 shrink-0 mt-0.5 text-teal-600 dark:text-teal-400" />
+                  <span>
+                    دروس آماده برای «{previewLevelLabel} · {previewGrade}»:{' '}
+                    <strong>{matchedCourses.map((c) => c.title).join('، ')}</strong>
+                  </span>
+                </div>
+              ) : (
+                <div className="text-xs text-slate-600 dark:text-slate-400">
+                  برای «{previewLevelLabel} · {previewGrade}» هنوز بسته خودکاری در مخزن ثبت نشده است؛ پس از ذخیره می‌توانید فایل درس دلخواه را دستی اضافه کنید.
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Feedback */}
           {errorMsg && (
             <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs sm:text-sm font-bold flex items-center gap-2">
@@ -445,8 +521,9 @@ export function ProfileModal({
               {isProfileComplete(profile) && !confirmClear && (
                 <button
                   type="button"
+                  disabled={saving}
                   onClick={() => setConfirmClear(true)}
-                  className="min-h-[42px] inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 text-xs font-bold"
+                  className="min-h-[42px] inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-50 text-xs font-bold"
                 >
                   <Trash2 className="w-4 h-4" />
                   <span>پاک کردن پروفایل</span>
@@ -456,6 +533,7 @@ export function ProfileModal({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
+                    disabled={saving}
                     onClick={() => {
                       onClearProfile();
                       setConfirmClear(false);
@@ -466,6 +544,7 @@ export function ProfileModal({
                   </button>
                   <button
                     type="button"
+                    disabled={saving}
                     onClick={() => setConfirmClear(false)}
                     className="min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold"
                   >
@@ -478,16 +557,25 @@ export function ProfileModal({
             <div className="flex items-center gap-2 mr-auto">
               <button
                 type="button"
+                disabled={saving}
                 onClick={onClose}
-                className="min-h-[44px] px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs sm:text-sm font-bold"
+                className="min-h-[44px] px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 text-xs sm:text-sm font-bold"
               >
                 بستن
               </button>
               <button
                 type="submit"
-                className="min-h-[44px] px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold transition-colors"
+                disabled={saving}
+                className="min-h-[44px] inline-flex items-center justify-center gap-2 px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-70 text-white text-xs sm:text-sm font-bold transition-colors"
               >
-                ذخیره اطلاعات پروفایل
+                {saving && <RefreshCw className="w-4 h-4 animate-spin shrink-0" />}
+                <span>
+                  {saving
+                    ? autoLoadCourses && matchedCourses.length > 0
+                      ? 'در حال ذخیره و بارگیری دروس...'
+                      : 'در حال ذخیره...'
+                    : 'ذخیره اطلاعات پروفایل'}
+                </span>
               </button>
             </div>
           </div>

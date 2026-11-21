@@ -26,9 +26,9 @@ import {
 import { toPersianDigits } from '../utils/mathHelpers';
 import { triggerOfflineHtmlDownload } from './Modals';
 
-export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '2.3.1';
+export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '2.3.3';
 export const APK_VERSION_CODE =
-  typeof __APK_VERSION_CODE__ !== 'undefined' ? __APK_VERSION_CODE__ : 24;
+  typeof __APK_VERSION_CODE__ !== 'undefined' ? __APK_VERSION_CODE__ : 26;
 
 const CATALOG_URL_KEY = 'amoozeshyar_catalog_url_v1';
 const REMOTE_UPDATE_URL_KEY = 'amoozeshyar_update_url_v1';
@@ -748,7 +748,7 @@ export function OnlineUpdateModal({
                     dir="ltr"
                     value={courseUrl}
                     onChange={(e) => setCourseUrl(e.target.value)}
-                    placeholder="https://example.com/courses/math8.json"
+                    placeholder="https://ha1358.github.io/amoozeshyar/courses/math8.json"
                     className="flex-1 min-w-[200px] min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs sm:text-sm text-left"
                   />
                   <button

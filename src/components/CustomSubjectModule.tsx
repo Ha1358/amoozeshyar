@@ -171,16 +171,34 @@ export function AddSubjectModal({
     });
   };
 
+  const GITHUB_COURSES_BASE = 'https://ha1358.github.io/amoozeshyar/courses';
+
+  const fetchBundledOrRemoteCourseText = async (fileName: string): Promise<string> => {
+    const isFileProto = typeof window !== 'undefined' && window.location.protocol === 'file:';
+    if (!isFileProto) {
+      try {
+        const baseUrl = import.meta.env.BASE_URL || '/';
+        const localUrl = `${baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`}courses/${fileName}`;
+        const localRes = await fetch(localUrl, { cache: 'no-store' });
+        if (localRes.ok) {
+          return await localRes.text();
+        }
+      } catch {
+        // Fallback to GitHub Pages
+      }
+    }
+    const remoteRes = await fetch(`${GITHUB_COURSES_BASE}/${fileName}?t=${Date.now()}`, {
+      cache: 'no-store',
+    });
+    if (!remoteRes.ok) throw new Error(`HTTP ${remoteRes.status}`);
+    return await remoteRes.text();
+  };
+
   const handleDownloadMath8 = async () => {
     setBusy(true);
     setMsg(null);
     try {
-      const baseUrl = import.meta.env.BASE_URL || '/';
-      const res = await fetch(`${baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`}courses/math8.json`, {
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
+      const text = await fetchBundledOrRemoteCourseText('math8.json');
       const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -197,7 +215,7 @@ export function AddSubjectModal({
     } catch {
       setMsg({
         ok: false,
-        text: 'در حالت فایل آفلاین مستقل، فایل json ریاضی هشتم را از دستگاه خود با دکمه «انتخاب فایل» بارگذاری کنید.',
+        text: 'در حالت فایل آفلاین، اگر اینترنت قطع است فایل json ریاضی هشتم را از دستگاه خود با دکمه «انتخاب فایل» بارگذاری کنید.',
       });
     } finally {
       setBusy(false);
@@ -208,12 +226,7 @@ export function AddSubjectModal({
     setBusy(true);
     setMsg(null);
     try {
-      const baseUrl = import.meta.env.BASE_URL || '/';
-      const res = await fetch(`${baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`}courses/aef1-v3.json`, {
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
+      const text = await fetchBundledOrRemoteCourseText('aef1-v3.json');
       const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -230,7 +243,7 @@ export function AddSubjectModal({
     } catch {
       setMsg({
         ok: false,
-        text: 'در حالت فایل آفلاین مستقل، فایل json درس زبان را از دستگاه خود با دکمه «انتخاب فایل» بارگذاری کنید.',
+        text: 'در حالت فایل آفلاین، اگر اینترنت قطع است فایل json درس زبان را از دستگاه خود با دکمه «انتخاب فایل» بارگذاری کنید.',
       });
     } finally {
       setBusy(false);
@@ -259,8 +272,8 @@ export function AddSubjectModal({
     }
   };
 
-  const handleFetchFromUrl = async () => {
-    const clean = urlInput.trim();
+  const handleFetchFromUrl = async (overrideUrl?: string) => {
+    const clean = (typeof overrideUrl === 'string' ? overrideUrl : urlInput).trim();
     if (!clean) {
       setMsg({ ok: false, text: 'لطفاً آدرس اینترنتی فایل درس (.json یا .zip) را وارد کنید.' });
       return;
@@ -277,7 +290,7 @@ export function AddSubjectModal({
         return;
       }
       onLoadedCourses(res.courses, res.audioCandidates);
-      setUrlInput('');
+      if (typeof overrideUrl !== 'string') setUrlInput('');
       onClose();
     } catch {
       setMsg({
@@ -404,17 +417,42 @@ export function AddSubjectModal({
                   dir="ltr"
                   value={urlInput}
                   onChange={(e) => setUrlInput(e.target.value)}
-                  placeholder="https://example.com/courses/math8.json"
+                  placeholder="https://ha1358.github.io/amoozeshyar/courses/math8.json"
                   className="flex-1 min-w-[200px] min-h-[42px] px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs sm:text-sm text-left"
                 />
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={handleFetchFromUrl}
+                  onClick={() => handleFetchFromUrl()}
                   className="min-h-[42px] px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs sm:text-sm font-bold shrink-0"
                 >
                   {busy ? 'در حال دریافت...' : 'دریافت و افزودن'}
                 </button>
+              </div>
+              <div className="pt-1 space-y-1.5">
+                <div className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                  نصب مستقیم دروس رسمی با یک کلیک (از اینترنت):
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => handleFetchFromUrl(`${GITHUB_COURSES_BASE}/math8.json`)}
+                    className="min-h-[38px] px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Globe className="w-3.5 h-3.5 shrink-0" />
+                    <span>نصب مستقیم ریاضی هشتم</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => handleFetchFromUrl(`${GITHUB_COURSES_BASE}/aef1-v3.json`)}
+                    className="min-h-[38px] px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Globe className="w-3.5 h-3.5 shrink-0" />
+                    <span>نصب مستقیم زبان انگلیسی</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}

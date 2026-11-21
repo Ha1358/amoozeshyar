@@ -76,6 +76,25 @@ export function AudioTrackCard({
       el.playbackRate = rate;
       el.play().catch(() => setPlaying(false));
       setPlaying(true);
+      if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: track.title || track.label,
+            artist: 'آموزش یار',
+            album: track.label,
+          });
+          navigator.mediaSession.setActionHandler('play', () => {
+            el.play().catch(() => {});
+            setPlaying(true);
+          });
+          navigator.mediaSession.setActionHandler('pause', () => {
+            el.pause();
+            setPlaying(false);
+          });
+        } catch {
+          // Ignore unsupported MediaSession actions
+        }
+      }
     }
   };
 

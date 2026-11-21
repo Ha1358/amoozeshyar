@@ -3,6 +3,7 @@
   "appName": "آموزش یار",
   "webDir": "dist",
   "android": {
-    "allowMixedContent": true
+    "allowMixedContent": true,
+    "backgroundColor": "#f8fafc"
   }
 }

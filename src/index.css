@@ -13,6 +13,8 @@
   html {
     scroll-behavior: smooth;
     font-family: 'Vazirmatn', 'Vazir', Tahoma, system-ui, -apple-system, sans-serif;
+    overscroll-behavior-y: contain;
+    -webkit-tap-highlight-color: transparent;
   }
 
   body, button, input, select, textarea, svg text {
@@ -21,6 +23,34 @@
 
   body {
     line-height: 1.85;
+  }
+
+  button, a, label {
+    touch-action: manipulation;
+  }
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  body > *:not(#amoozeshyar-print-root) {
+    display: none !important;
+  }
+
+  #amoozeshyar-print-root {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    background: #ffffff !important;
+    color: #000000 !important;
   }
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
   FileText,
@@ -23,6 +23,7 @@ import {
   Trash2,
   GraduationCap,
   Sparkles,
+  Info,
 } from 'lucide-react';
 import appLogoUrl from './assets/images/app-logo.png';
 import type {
@@ -58,9 +59,21 @@ import {
 } from './utils/courseLoader';
 import { toPersianDigits } from './utils/mathHelpers';
 import { AudioLibraryModal } from './components/AudioLibraryModal';
+import { AboutModal } from './components/AboutModal';
 import { AddSubjectModal, CustomSubjectModule } from './components/CustomSubjectModule';
 import { OfflineBanner, PWAInstallModal } from './components/PWAInstallModal';
-import { APP_VERSION, OnlineUpdateModal } from './components/OnlineUpdateModal';
+import {
+  APP_VERSION,
+  OnlineUpdateModal,
+  checkRemoteAppUpdate,
+  type AppUpdateStatusState,
+} from './components/OnlineUpdateModal';
+import {
+  detectPlatformEnv,
+  requestPersistentStorage,
+  setupAndroidBackNavigation,
+  triggerOneClickApkDownload,
+} from './utils/androidSupport';
 import { usePWAInstall } from './hooks/usePWAInstall';
 import {
   DashboardModal,
@@ -184,12 +197,14 @@ export default function App() {
   const [addSubjectMode, setAddSubjectMode] = useState<'local' | 'url'>('local');
 
   const { isInstalled } = usePWAInstall();
-  const isNativeApk =
-    typeof window !== 'undefined' &&
-    ('Capacitor' in window ||
-      window.location.protocol === 'capacitor:' ||
-      (window.location.hostname === 'localhost' && !window.location.port));
+  const platformEnv = detectPlatformEnv();
+  const isNativeApk = platformEnv.isNativeApk;
   const hideInstallActions = isInstalled || isNativeApk;
+
+  const [remoteUpdateStatus, setRemoteUpdateStatus] = useState<AppUpdateStatusState | null>(
+    null
+  );
+  const [oneClickUpdating, setOneClickUpdating] = useState(false);
 
   const [activeModal, setActiveModal] = useState<
     | 'formulas'
@@ -201,8 +216,11 @@ export default function App() {
     | 'audio'
     | 'addSubject'
     | 'onlineUpdate'
+    | 'about'
     | null
   >(null);
+
+  const hasUpdateAvailable = remoteUpdateStatus?.type === 'available';
 
   const profileCompleted = isProfileComplete(userProfile);
   const visibleCourses = profileCompleted
@@ -349,6 +367,79 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  // Request persistent storage (protects IndexedDB & courses on Android) and check updates silently on startup
+  useEffect(() => {
+    void requestPersistentStorage();
+    if (!isOffline) {
+      void checkRemoteAppUpdate().then((res) => {
+        if (res.type === 'available' || res.type === 'latest') {
+          setRemoteUpdateStatus(res);
+        }
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Android Hardware Back Button & Mobile Popstate Navigation Guard
+  const navStateRef = useRef({
+    hasOverlay: false,
+    isInsideCourse: false,
+    closeOverlay: () => {},
+    goHome: () => {},
+  });
+  navStateRef.current = {
+    hasOverlay: activeModal !== null || mobileMenuOpen,
+    isInsideCourse: activeCourseId !== null,
+    closeOverlay: () => {
+      if (activeModal !== null) setActiveModal(null);
+      else if (mobileMenuOpen) setMobileMenuOpen(false);
+    },
+    goHome: () => setActiveCourseId(null),
+  };
+
+  useEffect(() => {
+    return setupAndroidBackNavigation({
+      canCloseOverlay: () => navStateRef.current.hasOverlay,
+      closeOverlay: () => navStateRef.current.closeOverlay(),
+      isInsideCourse: () => navStateRef.current.isInsideCourse,
+      goHome: () => navStateRef.current.goHome(),
+      onConfirmExitPrompt: () => {
+        showToastMsg(true, 'برای خروج از برنامه، دکمه بازگشت را یک بار دیگر بزنید.');
+      },
+    });
+  }, []);
+
+  const handleOneClickBannerUpdate = async () => {
+    if (!remoteUpdateStatus || remoteUpdateStatus.type !== 'available') return;
+    setOneClickUpdating(true);
+    try {
+      if (platformEnv.isNativeApk && remoteUpdateStatus.apkUrl) {
+        const res = await triggerOneClickApkDownload(remoteUpdateStatus.apkUrl);
+        showToastMsg(res.ok, res.msg);
+      } else if (platformEnv.isOfflineFile) {
+        const res = await triggerOfflineHtmlDownload({
+          sourceUrl: remoteUpdateStatus.offlineHtmlUrl,
+          backupBundle: buildBackupBundle(),
+        });
+        showToastMsg(res.ok, res.msg);
+      } else {
+        try {
+          if ('serviceWorker' in navigator) {
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg?.waiting) {
+              reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+            }
+          }
+        } catch {
+          // Ignore SW skip error
+        }
+        window.location.reload();
+      }
+    } finally {
+      setOneClickUpdating(false);
+    }
+  };
 
   // Scroll-to-top FAB visibility
   useEffect(() => {
@@ -652,10 +743,22 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveModal('onlineUpdate')}
-              className="inline-flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300 hover:underline whitespace-nowrap shrink-0 font-bold"
+              className={`inline-flex items-center gap-1.5 hover:underline whitespace-nowrap shrink-0 font-bold ${
+                hasUpdateAvailable
+                  ? 'text-emerald-700 dark:text-emerald-300'
+                  : 'text-indigo-700 dark:text-indigo-300'
+              }`}
             >
               <RefreshCw className="w-4 h-4" />
-              بروزرسانی و بارگذاری
+              <span>{hasUpdateAvailable ? 'نسخه جدید!' : 'بروزرسانی و دروس'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveModal('about')}
+              className="inline-flex items-center gap-1.5 hover:text-blue-700 dark:hover:text-blue-300 transition-colors whitespace-nowrap shrink-0"
+            >
+              <Info className="w-4 h-4" />
+              درباره
             </button>
             {!hideInstallActions && (
               <>
@@ -720,10 +823,14 @@ export default function App() {
               type="button"
               onClick={() => setActiveModal('onlineUpdate')}
               aria-label="بروزرسانی برنامه و بارگذاری دروس"
-              className="min-h-[40px] px-2.5 py-1.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap shrink-0"
+              className={`min-h-[40px] px-2.5 py-1.5 rounded-xl border inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap shrink-0 ${
+                hasUpdateAvailable
+                  ? 'border-emerald-500 bg-emerald-600 text-white'
+                  : 'border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300'
+              }`}
             >
               <RefreshCw className="w-3.5 h-3.5 shrink-0" />
-              <span>بروزرسانی</span>
+              <span>{hasUpdateAvailable ? 'نسخه جدید' : 'بروزرسانی'}</span>
             </button>
 
             {activeCourse ? (
@@ -915,6 +1022,18 @@ export default function App() {
               )}
             </button>
 
+            <button
+              type="button"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                setActiveModal('about');
+              }}
+              className="min-h-[44px] flex items-center gap-2 px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
+            >
+              <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+              درباره و مشخصات
+            </button>
+
             {showAudioTools && (
               <button
                 type="button"
@@ -1056,6 +1175,12 @@ export default function App() {
               pkg={activeCourse}
               progress={progressMap[activeCourse.id] ?? defaultCourseProgress}
               audioMap={audioMap}
+              studentName={userProfile.fullName.trim() || undefined}
+              studentGradeLabel={
+                profileCompleted
+                  ? `${getEducationLevelLabel(userProfile.educationLevel)} · ${userProfile.grade}`
+                  : undefined
+              }
               onOpenAudioSetup={() => setActiveModal('audio')}
               onUpdateProgress={(updater) =>
                 setProgressMap((prev) => ({
@@ -1077,6 +1202,31 @@ export default function App() {
         ) : (
           /* Home Page & Course Selection */
           <div className="max-w-4xl mx-auto space-y-5">
+            {hasUpdateAvailable && remoteUpdateStatus && (
+              <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 flex flex-wrap items-center justify-between gap-3">
+                <div className="space-y-0.5 min-w-0">
+                  <div className="font-bold text-xs sm:text-sm text-emerald-900 dark:text-emerald-200">
+                    نسخه جدید آموزش یار ({toPersianDigits(remoteUpdateStatus.remoteVersion || '')}) آماده است!
+                  </div>
+                  {remoteUpdateStatus.notes && (
+                    <p className="text-[11px] sm:text-xs text-emerald-800 dark:text-emerald-300 line-clamp-2">
+                      {remoteUpdateStatus.notes}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={oneClickUpdating}
+                  onClick={handleOneClickBannerUpdate}
+                  className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs sm:text-sm font-bold shrink-0 shadow-sm"
+                >
+                  <RefreshCw className={`w-4 h-4 shrink-0 ${oneClickUpdating ? 'animate-spin' : ''}`} />
+                  <span>
+                    {oneClickUpdating ? 'در حال دریافت...' : 'دانلود و بروزرسانی با یک کلیک'}
+                  </span>
+                </button>
+              </div>
+            )}
             {/* Hero & Student Profile Card */}
             <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-7 space-y-5 shadow-sm">
               <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 text-center sm:text-right">
@@ -1322,10 +1472,18 @@ export default function App() {
       </main>
 
       {/* Subtle Footer */}
-      <footer className="border-t border-slate-200 dark:border-slate-800 py-3 px-4 text-center text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+      <footer className="border-t border-slate-200 dark:border-slate-800 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] px-4 text-center text-xs text-slate-500 dark:text-slate-400 tabular-nums flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
         <span>آموزش یار</span>
-        <span className="mx-2" aria-hidden="true">·</span>
+        <span aria-hidden="true">·</span>
         <span>نسخه {toPersianDigits(APP_VERSION)}</span>
+        <span aria-hidden="true">·</span>
+        <button
+          type="button"
+          onClick={() => setActiveModal('about')}
+          className="text-blue-700 dark:text-blue-400 hover:underline font-bold"
+        >
+          درباره و مشخصات برنامه
+        </button>
       </footer>
 
       {/* Persistent Floating Calculator Button (Visible ONLY when active course is Math) */}
@@ -1335,7 +1493,7 @@ export default function App() {
           onClick={() => setActiveModal('scratchpad')}
           title="ماشین‌حساب پیشرفته توان و کسر"
           aria-label="ماشین‌حساب پیشرفته"
-          className="fixed bottom-4 right-4 z-[55] min-h-[48px] px-3.5 sm:px-4 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white shadow-xl flex items-center gap-2 font-bold text-xs sm:text-sm transition-transform hover:scale-105"
+          className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-[55] min-h-[48px] px-3.5 sm:px-4 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white shadow-xl flex items-center gap-2 font-bold text-xs sm:text-sm transition-transform hover:scale-105"
         >
           <Calculator className="w-5 h-5 shrink-0" />
           <span>ماشین‌حساب</span>
@@ -1349,7 +1507,7 @@ export default function App() {
           onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
           title="بازگشت به بالا"
           aria-label="بازگشت به بالا"
-          className="fixed bottom-4 left-4 w-11 h-11 rounded-full bg-slate-800 dark:bg-slate-700 hover:bg-slate-700 text-white shadow-lg flex items-center justify-center z-40 transition-transform hover:scale-105"
+          className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 w-11 h-11 rounded-full bg-slate-800 dark:bg-slate-700 hover:bg-slate-700 text-white shadow-lg flex items-center justify-center z-40 transition-transform hover:scale-105"
         >
           <ArrowUp className="w-5 h-5" />
         </button>
@@ -1474,10 +1632,21 @@ export default function App() {
         onClose={() => setActiveModal(null)}
         isOffline={isOffline}
         courses={courses}
+        initialUpdateStatus={remoteUpdateStatus}
+        onUpdateStatusChange={setRemoteUpdateStatus}
+        onOpenAboutModal={() => setActiveModal('about')}
         onLoadedCourses={handleLoadedCourses}
         onExportBackup={handleExportBackup}
         onImportBackupFile={handleImportBackupFile}
         onBuildBackupBundle={buildBackupBundle}
+      />
+      <AboutModal
+        open={activeModal === 'about'}
+        onClose={() => setActiveModal(null)}
+        isOffline={isOffline}
+        coursesCount={courses.length}
+        hasUpdateAvailable={hasUpdateAvailable}
+        onOpenUpdateModal={() => setActiveModal('onlineUpdate')}
       />
     </div>
   );

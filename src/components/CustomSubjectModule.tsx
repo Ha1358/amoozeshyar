@@ -29,6 +29,7 @@ import {
   EyeOff,
   Sigma,
   Type,
+  Printer,
 } from 'lucide-react';
 import {
   Chapter1Labs,
@@ -63,6 +64,10 @@ import {
 import { areCourseAnswersEqual, toPersianDigits } from '../utils/mathHelpers';
 import { BidiText } from './MathPrimitives';
 import { AudioTrackCard, speakEnglishText } from './AudioTrackPlayer';
+import {
+  PrintableWorksheetModal,
+  type PrintableQuestionItem,
+} from './PrintableWorksheetModal';
 
 export const validateCustomSubjectPackage = validateCoursePackage;
 
@@ -526,6 +531,8 @@ export function CustomSubjectModule({
   pkg,
   progress,
   audioMap,
+  studentName,
+  studentGradeLabel,
   onOpenAudioSetup,
   onUpdateProgress,
   onApplyCourseUpdate,
@@ -534,6 +541,8 @@ export function CustomSubjectModule({
   pkg: CustomSubjectPackage;
   progress: CustomSubjectProgress;
   audioMap: LoadedAudioMap;
+  studentName?: string;
+  studentGradeLabel?: string;
   onOpenAudioSetup: () => void;
   onUpdateProgress: (updater: (prev: CustomSubjectProgress) => CustomSubjectProgress) => void;
   onApplyCourseUpdate: (
@@ -545,6 +554,7 @@ export function CustomSubjectModule({
   const [chapterIdx, setChapterIdx] = useState(0);
   const [lessonIdx, setLessonIdx] = useState(0);
   const [tab, setTab] = useState<'lesson' | 'practice' | 'quiz'>('lesson');
+  const [printMode, setPrintMode] = useState<'practice' | 'quiz' | null>(null);
 
   // Per-lesson question series round (0 = primary set, 1..N = variants)
   const [variantRoundByLesson, setVariantRoundByLesson] = useState<Record<string, number>>({});
@@ -607,6 +617,7 @@ export function CustomSubjectModule({
     setShowUpdatePanel(false);
     setUpdateNote(null);
     setConfirmDelete(false);
+    setPrintMode(null);
     setUpdateUrl(pkg.sourceUrl || '');
   }, [pkg.id]);
 
@@ -1470,7 +1481,7 @@ export function CustomSubjectModule({
 
         {tab === 'practice' && (
           <div className="space-y-4">
-            {/* Practice Header & Question Regeneration */}
+            {/* Practice Header, Question Regeneration & Print Button */}
             <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-0.5">
                 <div className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100">
@@ -1481,21 +1492,34 @@ export function CustomSubjectModule({
                 </div>
               </div>
 
-              {hasMultipleVariants && (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-slate-600 dark:text-slate-300 tabular-nums">
-                    سری {toPersianDigits(currentRound + 1)} از {toPersianDigits(maxVariantsCount)}
-                  </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {lesson.exercises.length > 0 && (
                   <button
                     type="button"
-                    onClick={handleRegenerateLessonExercises}
-                    className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold shadow-sm"
+                    onClick={() => setPrintMode('practice')}
+                    className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-900 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-xs sm:text-sm font-bold shadow-sm"
                   >
-                    <Shuffle className="w-4 h-4 shrink-0" />
-                    <span>تغییر سؤالات (سری جدید)</span>
+                    <Printer className="w-4 h-4 shrink-0" />
+                    <span>چاپ نمونه سؤالات</span>
                   </button>
-                </div>
-              )}
+                )}
+
+                {hasMultipleVariants && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-600 dark:text-slate-300 tabular-nums">
+                      سری {toPersianDigits(currentRound + 1)} از {toPersianDigits(maxVariantsCount)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleRegenerateLessonExercises}
+                      className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold shadow-sm"
+                    >
+                      <Shuffle className="w-4 h-4 shrink-0" />
+                      <span>تغییر سؤالات (سری جدید)</span>
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             {lesson.exercises.map((exBase, idx) => {
@@ -1710,6 +1734,27 @@ export function CustomSubjectModule({
 
         {tab === 'quiz' && (
           <div className="space-y-4">
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2.5">
+              <div className="space-y-0.5">
+                <div className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100">
+                  آزمون جامع {ch.title}
+                </div>
+                <div className="text-xs text-slate-600 dark:text-slate-400 tabular-nums">
+                  {toPersianDigits(ch.quiz.length)} سؤال چهارگزینه‌ای استاندارد همراه با کارنامه و پاسخ تشریحی
+                </div>
+              </div>
+              {ch.quiz.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setPrintMode('quiz')}
+                  className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-900 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-xs sm:text-sm font-bold shadow-sm"
+                >
+                  <Printer className="w-4 h-4 shrink-0" />
+                  <span>چاپ نمونه سؤالات آزمون</span>
+                </button>
+              )}
+            </div>
+
             {chapterBest && (
               <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-xs sm:text-sm font-bold text-blue-800 dark:text-blue-200 tabular-nums">
                 بهترین نمره ثبت‌شده این فصل: {toPersianDigits(chapterBest.grade20)} از ۲۰ (
@@ -1856,6 +1901,44 @@ export function CustomSubjectModule({
           </div>
         )}
       </section>
+
+      <PrintableWorksheetModal
+        open={printMode !== null}
+        onClose={() => setPrintMode(null)}
+        title={
+          printMode === 'quiz'
+            ? `برگه آزمون جامع — ${ch.short}`
+            : `برگه تمرین — ${lesson.title}`
+        }
+        courseTitle={pkg.title}
+        chapterTitle={ch.title}
+        studentName={studentName}
+        gradeLabel={studentGradeLabel}
+        questions={
+          (printMode === 'quiz'
+            ? ch.quiz.map((q) => ({
+                prompt: q.q,
+                options: q.opts,
+                correctAnswer: q.opts[q.ans],
+                explain: q.explain,
+                solutionSteps: q.solutionSteps,
+              }))
+            : lesson.exercises.map((exBase) => {
+                const ex = getExerciseVariantForRound(exBase, currentRound);
+                const correctDisplay =
+                  ex.type === 'mcq' && ex.options && ex.ansIndex !== undefined
+                    ? ex.options[ex.ansIndex]
+                    : ex.acceptedAnswers[0];
+                return {
+                  prompt: ex.prompt,
+                  options: ex.options,
+                  correctAnswer: correctDisplay,
+                  explain: ex.explain,
+                  solutionSteps: ex.solutionSteps,
+                };
+              })) as PrintableQuestionItem[]
+        }
+      />
     </div>
   );
 }

@@ -4,25 +4,23 @@
       "id": "math_grade8_complete",
       "title": "ریاضی پایه هشتم (کامل)",
       "subtitle": "۹ فصل کامل همراه با درسنامه رنگی، آزمایشگاه تعاملی، فرمول‌ها، تمرین و آزمون",
-      "version": "2.3.4",
+      "version": "2.3.5",
       "category": "math",
+      "isExtracurricular": false,
       "educationLevels": ["middle"],
       "grades": ["پایه هشتم"],
       "localPath": "courses/math8.json",
       "url": "https://ha1358.github.io/amoozeshyar/courses/math8.json"
     },
     {
-      "id": "english_aef1_v3",
+      "id": "aef1-v3",
       "title": "زبان انگلیسی (American English File 1)",
-      "subtitle": "۱۲ فصل، ۴۸ درس، ۷۲۰ تمرین تعاملی و آزمون‌ها",
+      "subtitle": "درس فوق‌برنامه (قابل استفاده در تمام مقاطع) · ۱۲ فصل، ۴۸ درس، ۷۲۰ تمرین تعاملی و آزمون‌ها",
       "version": "3.0.0",
       "category": "english",
-      "educationLevels": ["other"],
-      "grades": [
-        "مقدماتی (A1–A2)",
-        "متوسط (B1–B2)",
-        "سطح عمومی"
-      ],
+      "isExtracurricular": true,
+      "educationLevels": ["elementary", "middle", "high", "university", "other"],
+      "grades": ["*"],
       "localPath": "courses/aef1-v3.json",
       "url": "https://ha1358.github.io/amoozeshyar/courses/aef1-v3.json"
     }

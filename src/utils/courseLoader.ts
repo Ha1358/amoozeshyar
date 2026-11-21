@@ -18,6 +18,7 @@ export interface CatalogCourseEntry {
   localPath?: string;
   educationLevels?: EducationLevelId[];
   grades?: string[];
+  isExtracurricular?: boolean;
 }
 
 export interface LocalLoadResult {
@@ -247,37 +248,110 @@ export async function fetchCatalogFromUrl(catalogUrl: string): Promise<CatalogCo
 
 export const DEFAULT_GITHUB_CATALOG_URL = 'https://ha1358.github.io/amoozeshyar/catalog.json';
 
+export const ALL_EDUCATION_LEVELS: EducationLevelId[] = [
+  'elementary',
+  'middle',
+  'high',
+  'university',
+  'other',
+];
+
 export const BUILTIN_COURSE_CATALOG: CatalogCourseEntry[] = [
   {
     id: 'math_grade8_complete',
     title: 'ریاضی پایه هشتم (کامل)',
     subtitle: '۹ فصل کامل همراه با درسنامه رنگی، آزمایشگاه تعاملی، فرمول‌ها، تمرین و آزمون',
-    version: '2.3.3',
+    version: '2.3.5',
     category: 'math',
+    isExtracurricular: false,
     educationLevels: ['middle'],
     grades: ['پایه هشتم'],
     localPath: 'courses/math8.json',
     url: 'https://ha1358.github.io/amoozeshyar/courses/math8.json',
   },
   {
-    id: 'english_aef1_v3',
+    id: 'aef1-v3',
     title: 'زبان انگلیسی (American English File 1)',
-    subtitle: '۱۲ فصل، ۴۸ درس، ۷۲۰ تمرین تعاملی و آزمون‌ها',
+    subtitle: 'درس فوق‌برنامه (قابل استفاده در تمام مقاطع) · ۱۲ فصل، ۴۸ درس، ۷۲۰ تمرین تعاملی و آزمون‌ها',
     version: '3.0.0',
     category: 'english',
-    educationLevels: ['other'],
-    grades: ['مقدماتی (A1–A2)', 'متوسط (B1–B2)', 'سطح عمومی'],
+    isExtracurricular: true,
+    educationLevels: ALL_EDUCATION_LEVELS,
+    grades: ['*'],
     localPath: 'courses/aef1-v3.json',
     url: 'https://ha1358.github.io/amoozeshyar/courses/aef1-v3.json',
   },
 ];
 
+function isAefCourseId(id?: string): boolean {
+  if (!id) return false;
+  const clean = id.trim().toLowerCase();
+  return clean === 'aef1-v3' || clean === 'english_aef1_v3' || clean.startsWith('aef');
+}
+
+export function findBuiltinCatalogEntry(
+  pkg?: Pick<CustomSubjectPackage, 'id' | 'title' | 'category'> | null
+): CatalogCourseEntry | undefined {
+  if (!pkg) return undefined;
+  const exact = BUILTIN_COURSE_CATALOG.find((c) => c.id === pkg.id);
+  if (exact) return exact;
+  if (
+    isAefCourseId(pkg.id) ||
+    (pkg.category === 'english' && pkg.title?.includes('American English File'))
+  ) {
+    return BUILTIN_COURSE_CATALOG.find((c) => c.id === 'aef1-v3');
+  }
+  return undefined;
+}
+
+export function isCatalogEntryExtracurricular(
+  entry?: Pick<CatalogCourseEntry, 'id' | 'title' | 'category' | 'isExtracurricular' | 'grades' | 'educationLevels'> | null
+): boolean {
+  if (!entry) return false;
+  if (typeof entry.isExtracurricular === 'boolean') return entry.isExtracurricular;
+  if (isAefCourseId(entry.id) || entry.title?.includes('American English File')) return true;
+  if (Array.isArray(entry.grades) && entry.grades.includes('*')) return true;
+  if (Array.isArray(entry.educationLevels) && entry.educationLevels.length >= ALL_EDUCATION_LEVELS.length) {
+    return true;
+  }
+  return false;
+}
+
+export function isExtracurricularCourse(
+  pkg?: Pick<CustomSubjectPackage, 'id' | 'title' | 'category' | 'isExtracurricular' | 'educationLevels' | 'grades'> | null
+): boolean {
+  if (!pkg) return false;
+  if (typeof pkg.isExtracurricular === 'boolean') return pkg.isExtracurricular;
+  const builtinMatch = findBuiltinCatalogEntry(pkg);
+  if (builtinMatch?.isExtracurricular) return true;
+  if (Array.isArray(pkg.grades) && pkg.grades.includes('*')) return true;
+  if (Array.isArray(pkg.educationLevels) && pkg.educationLevels.length >= ALL_EDUCATION_LEVELS.length) {
+    return true;
+  }
+  return false;
+}
+
 export function attachCourseProfileTags(
   pkg: CustomSubjectPackage,
   profile?: Pick<UserProfile, 'educationLevel' | 'grade'>,
-  catalogEntry?: Pick<CatalogCourseEntry, 'educationLevels' | 'grades'>
+  catalogEntry?: Pick<CatalogCourseEntry, 'educationLevels' | 'grades' | 'isExtracurricular'>
 ): CustomSubjectPackage {
-  const builtinMatch = BUILTIN_COURSE_CATALOG.find((c) => c.id === pkg.id);
+  const builtinMatch = findBuiltinCatalogEntry(pkg);
+  const extracurricular =
+    Boolean(pkg.isExtracurricular) ||
+    Boolean(catalogEntry?.isExtracurricular) ||
+    Boolean(builtinMatch?.isExtracurricular) ||
+    isExtracurricularCourse(pkg);
+
+  if (extracurricular) {
+    return {
+      ...pkg,
+      isExtracurricular: true,
+      educationLevels: [...ALL_EDUCATION_LEVELS],
+      grades: ['*'],
+    };
+  }
+
   const resolvedLevels =
     pkg.educationLevels && pkg.educationLevels.length > 0
       ? pkg.educationLevels
@@ -302,6 +376,7 @@ export function attachCourseProfileTags(
 
   return {
     ...pkg,
+    ...(typeof pkg.isExtracurricular === 'boolean' ? { isExtracurricular: pkg.isExtracurricular } : {}),
     ...(resolvedLevels ? { educationLevels: resolvedLevels } : {}),
     ...(resolvedGrades ? { grades: resolvedGrades } : {}),
   };
@@ -312,7 +387,9 @@ export function courseMatchesProfile(
   profile: Pick<UserProfile, 'educationLevel' | 'grade'>
 ): boolean {
   if (!profile.educationLevel || !profile.grade.trim()) return true;
-  const builtinMatch = BUILTIN_COURSE_CATALOG.find((c) => c.id === pkg.id);
+  if (isExtracurricularCourse(pkg)) return true;
+
+  const builtinMatch = findBuiltinCatalogEntry(pkg);
   const levels =
     pkg.educationLevels && pkg.educationLevels.length > 0
       ? pkg.educationLevels
@@ -342,11 +419,22 @@ function normalizeMatchText(s: string): string {
 
 export function matchCatalogEntriesForProfile(
   entries: CatalogCourseEntry[],
-  profile: Pick<UserProfile, 'educationLevel' | 'grade'>
+  profile: Pick<UserProfile, 'educationLevel' | 'grade'>,
+  options?: { includeCurricular?: boolean; includeExtracurricular?: boolean }
 ): CatalogCourseEntry[] {
   if (!profile.educationLevel || !profile.grade.trim()) return [];
+  const includeCurricular = options?.includeCurricular !== false;
+  const includeExtracurricular = options?.includeExtracurricular !== false;
   const normGrade = normalizeMatchText(profile.grade);
+
   return entries.filter((entry) => {
+    const extra = isCatalogEntryExtracurricular(entry);
+    if (extra) {
+      return includeExtracurricular;
+    }
+    if (!includeCurricular) {
+      return false;
+    }
     if (!Array.isArray(entry.educationLevels) || entry.educationLevels.length === 0) {
       return false;
     }
@@ -394,7 +482,11 @@ export async function loadAvailableCourseCatalog(preferredUrl?: string): Promise
 export async function autoLoadCoursesForProfile(
   profile: UserProfile,
   existingCourses: CustomSubjectPackage[],
-  options?: { catalogUrl?: string }
+  options?: {
+    catalogUrl?: string;
+    includeCurricular?: boolean;
+    includeExtracurricular?: boolean;
+  }
 ): Promise<{
   matchedEntries: CatalogCourseEntry[];
   loadedCourses: CustomSubjectPackage[];
@@ -403,7 +495,10 @@ export async function autoLoadCoursesForProfile(
   failedTitles: string[];
 }> {
   const catalog = await loadAvailableCourseCatalog(options?.catalogUrl);
-  const matchedEntries = matchCatalogEntriesForProfile(catalog, profile);
+  const matchedEntries = matchCatalogEntriesForProfile(catalog, profile, {
+    includeCurricular: options?.includeCurricular,
+    includeExtracurricular: options?.includeExtracurricular,
+  });
 
   if (matchedEntries.length === 0) {
     return {
@@ -426,7 +521,9 @@ export async function autoLoadCoursesForProfile(
   const failedTitles: string[] = [];
 
   for (const entry of matchedEntries) {
-    const existing = existingCourses.find((c) => c.id === entry.id);
+    const existing = existingCourses.find(
+      (c) => c.id === entry.id || (isAefCourseId(entry.id) && isAefCourseId(c.id))
+    );
     if (existing && (!entry.version || existing.version === entry.version)) {
       alreadyInstalledTitles.push(existing.title || entry.title);
       continue;

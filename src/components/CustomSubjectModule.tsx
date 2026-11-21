@@ -140,6 +140,7 @@ export function AddSubjectModal({
   ) => void;
 }) {
   const [mode, setMode] = useState<'local' | 'url'>(initialMode);
+  const [markAsExtracurricular, setMarkAsExtracurricular] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [urlInput, setUrlInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -147,6 +148,7 @@ export function AddSubjectModal({
   useEffect(() => {
     if (open) {
       setMode(initialMode);
+      setMarkAsExtracurricular(false);
       setMsg(null);
     }
   }, [open, initialMode]);
@@ -263,7 +265,10 @@ export function AddSubjectModal({
         });
         return;
       }
-      onLoadedCourses(res.courses, res.audioCandidates);
+      const taggedCourses = markAsExtracurricular
+        ? res.courses.map((c) => ({ ...c, isExtracurricular: true }))
+        : res.courses;
+      onLoadedCourses(taggedCourses, res.audioCandidates);
       onClose();
     } catch {
       setMsg({ ok: false, text: 'خطا در خواندن فایل یا پوشه محلی.' });
@@ -289,7 +294,10 @@ export function AddSubjectModal({
         });
         return;
       }
-      onLoadedCourses(res.courses, res.audioCandidates);
+      const taggedCourses = markAsExtracurricular
+        ? res.courses.map((c) => ({ ...c, isExtracurricular: true }))
+        : res.courses;
+      onLoadedCourses(taggedCourses, res.audioCandidates);
       if (typeof overrideUrl !== 'string') setUrlInput('');
       onClose();
     } catch {
@@ -450,12 +458,23 @@ export function AddSubjectModal({
                     className="min-h-[38px] px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5"
                   >
                     <Globe className="w-3.5 h-3.5 shrink-0" />
-                    <span>نصب مستقیم زبان انگلیسی</span>
+                    <span>نصب زبان AEF 1 (فوق‌برنامه)</span>
                   </button>
                 </div>
               </div>
             </div>
           )}
+
+          <label className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs font-bold text-amber-900 dark:text-amber-200 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={markAsExtracurricular}
+              disabled={busy}
+              onChange={(e) => setMarkAsExtracurricular(e.target.checked)}
+              className="w-4 h-4 rounded accent-amber-600 shrink-0"
+            />
+            <span>ثبت این درس به‌عنوان درس فوق‌برنامه (قابل استفاده در تمام مقاطع و پایه‌ها)</span>
+          </label>
 
           <div className="space-y-2 pt-1">
             <button
@@ -475,7 +494,7 @@ export function AddSubjectModal({
               className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-200 font-bold text-xs sm:text-sm hover:bg-indigo-100 dark:hover:bg-indigo-900/50"
             >
               <Download className="w-4 h-4 shrink-0" />
-              <span>دانلود فایل آماده درس زبان AEF 1 (ویرایش سوم + متن کامل صوت و تصویر)</span>
+              <span>دانلود فایل آماده درس زبان AEF 1 (فوق‌برنامه · ویرایش سوم + صوت و تصویر)</span>
             </button>
 
             <button

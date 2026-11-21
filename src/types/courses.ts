@@ -178,6 +178,7 @@ export interface CustomSubjectPackage {
   category?: CourseCategory;
   educationLevels?: EducationLevelId[];
   grades?: string[];
+  isExtracurricular?: boolean;
   enableCalculator?: boolean;
   enableAudio?: boolean;
   dir?: 'rtl' | 'ltr';

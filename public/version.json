@@ -1,9 +1,9 @@
 {
   "appName": "آموزش یار",
-  "version": "2.3.4",
-  "versionCode": 27,
+  "version": "2.3.5",
+  "versionCode": 28,
   "releaseDate": "2026-11-21",
   "offlineHtmlUrl": "amoozeshyar-offline.html",
   "apkUrl": "https://github.com/Ha1358/amoozeshyar/releases/latest/download/amoozeshyar.apk",
-  "notes": "آموزش یار نسخه ۲.۳.۴: افزودن صفحه اصلی و انتخاب دروس، نمایش دقیق دروس بر اساس مقطع و پایه ثبت‌شده، و نمایش واضح لوگو و منوی بروزرسانی در اپلیکیشن موبایل"
+  "notes": "آموزش یار نسخه ۲.۳.۵: تعریف درس زبان انگلیسی American English File به‌عنوان درس فوق‌برنامه قابل استفاده در تمامی مقاطع و پایه‌های تحصیلی همراه با تفکیک دروس رسمی و فوق‌برنامه"
 }

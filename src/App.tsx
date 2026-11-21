@@ -22,6 +22,7 @@ import {
   ArrowLeft,
   Trash2,
   GraduationCap,
+  Sparkles,
 } from 'lucide-react';
 import appLogoUrl from './assets/images/app-logo.png';
 import type {
@@ -48,6 +49,7 @@ import {
   autoLoadCoursesForProfile,
   courseMatchesProfile,
   hasAudioSupport,
+  isExtracurricularCourse,
   isMathCourse,
   mergeCoursesPreservingMetadata,
   mergeProgressMapsPreserving,
@@ -206,6 +208,9 @@ export default function App() {
   const visibleCourses = profileCompleted
     ? courses.filter((c) => courseMatchesProfile(c, userProfile))
     : courses;
+  const curricularVisibleCourses = visibleCourses.filter((c) => !isExtracurricularCourse(c));
+  const extracurricularVisibleCourses = visibleCourses.filter((c) => isExtracurricularCourse(c));
+  const sortedVisibleCourses = [...curricularVisibleCourses, ...extracurricularVisibleCourses];
   const activeCourse = activeCourseId
     ? visibleCourses.find((c) => c.id === activeCourseId) ?? null
     : null;
@@ -1148,60 +1153,80 @@ export default function App() {
               </div>
 
               {visibleCourses.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                  {visibleCourses.map((cs) => {
-                    const pr = progressMap[cs.id] ?? defaultCourseProgress;
-                    const totalLessons = cs.chapters.reduce(
-                      (sum, ch) => sum + ch.lessons.length,
-                      0
-                    );
-                    const studiedCount = Object.values(pr.lessonsStudied || {}).filter(Boolean).length;
-                    const pct = totalLessons > 0 ? Math.round((studiedCount / totalLessons) * 100) : 0;
-                    const isMath = isMathCourse(cs);
+                <div className="space-y-3.5">
+                  {profileCompleted &&
+                    curricularVisibleCourses.length === 0 &&
+                    extracurricularVisibleCourses.length > 0 && (
+                      <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                        برای «{getEducationLevelLabel(userProfile.educationLevel)} · {userProfile.grade}» هنوز درس رسمی بارگذاری نشده است؛ اما دروس فوق‌برنامه زیر در تمامی مقاطع قابل استفاده هستند.
+                      </div>
+                    )}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                    {sortedVisibleCourses.map((cs) => {
+                      const pr = progressMap[cs.id] ?? defaultCourseProgress;
+                      const totalLessons = cs.chapters.reduce(
+                        (sum, ch) => sum + ch.lessons.length,
+                        0
+                      );
+                      const studiedCount = Object.values(pr.lessonsStudied || {}).filter(Boolean).length;
+                      const pct = totalLessons > 0 ? Math.round((studiedCount / totalLessons) * 100) : 0;
+                      const isMath = isMathCourse(cs);
+                      const isExtra = isExtracurricularCourse(cs);
 
-                    return (
-                      <div
-                        key={cs.id}
-                        className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/50 flex flex-col justify-between gap-4 hover:border-blue-400 dark:hover:border-blue-600 transition-colors"
-                      >
-                        <div className="space-y-2">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <div
-                                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                                  isMath
-                                    ? 'bg-teal-100 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300'
-                                    : 'bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
-                                }`}
-                              >
-                                {isMath ? (
-                                  <Calculator className="w-5 h-5" />
-                                ) : (
-                                  <BookOpen className="w-5 h-5" />
-                                )}
-                              </div>
-                              <div className="min-w-0">
-                                <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100 truncate">
-                                  {cs.title}
-                                </h3>
-                                <div className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
-                                  {toPersianDigits(cs.chapters.length)} فصل ·{' '}
-                                  {toPersianDigits(totalLessons)} درس
+                      return (
+                        <div
+                          key={cs.id}
+                          className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/50 flex flex-col justify-between gap-4 hover:border-blue-400 dark:hover:border-blue-600 transition-colors"
+                        >
+                          <div className="space-y-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div
+                                  className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                                    isMath
+                                      ? 'bg-teal-100 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300'
+                                      : isExtra
+                                      ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300'
+                                      : 'bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
+                                  }`}
+                                >
+                                  {isMath ? (
+                                    <Calculator className="w-5 h-5" />
+                                  ) : isExtra ? (
+                                    <Sparkles className="w-5 h-5" />
+                                  ) : (
+                                    <BookOpen className="w-5 h-5" />
+                                  )}
+                                </div>
+                                <div className="min-w-0">
+                                  <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-slate-100 truncate">
+                                    {cs.title}
+                                  </h3>
+                                  <div className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums flex flex-wrap items-center gap-x-1.5">
+                                    <span>
+                                      {toPersianDigits(cs.chapters.length)} فصل ·{' '}
+                                      {toPersianDigits(totalLessons)} درس
+                                    </span>
+                                    {isExtra && (
+                                      <span className="font-bold text-amber-700 dark:text-amber-300">
+                                        · فوق‌برنامه (همه مقاطع)
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setCourses((prev) => prev.filter((item) => item.id !== cs.id))
+                                }
+                                aria-label={`حذف ${cs.title}`}
+                                title="حذف درس"
+                                className="min-w-[34px] min-h-[34px] rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center justify-center shrink-0"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setCourses((prev) => prev.filter((item) => item.id !== cs.id))
-                              }
-                              aria-label={`حذف ${cs.title}`}
-                              title="حذف درس"
-                              className="min-w-[34px] min-h-[34px] rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center justify-center shrink-0"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
 
                           <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed line-clamp-2">
                             {cs.subtitle}
@@ -1237,6 +1262,7 @@ export default function App() {
                       </div>
                     );
                   })}
+                  </div>
                 </div>
               ) : (
                 <div className="p-6 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-center space-y-2">
@@ -1359,8 +1385,9 @@ export default function App() {
         onSaveProfile={async (next, opts) => {
           setUserProfile(next);
           setActiveCourseId(null);
-          const shouldAutoLoad = opts?.autoLoadCourses !== false;
-          if (!shouldAutoLoad) {
+          const includeCurricular = opts?.autoLoadCourses !== false;
+          const includeExtracurricular = opts?.autoLoadExtracurricular !== false;
+          if (!includeCurricular && !includeExtracurricular) {
             showToastMsg(true, `پروفایل «${next.fullName}» با موفقیت ذخیره شد.`);
             setActiveModal(null);
             return;
@@ -1375,6 +1402,8 @@ export default function App() {
 
           const autoRes = await autoLoadCoursesForProfile(next, courses, {
             catalogUrl: preferredCatalogUrl || undefined,
+            includeCurricular,
+            includeExtracurricular,
           });
 
           if (autoRes.loadedCourses.length > 0) {

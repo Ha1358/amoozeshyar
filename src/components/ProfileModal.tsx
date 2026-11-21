@@ -14,6 +14,7 @@ import {
 import type { EducationLevelId, UserProfile } from '../types/courses';
 import {
   BUILTIN_COURSE_CATALOG,
+  isCatalogEntryExtracurricular,
   loadAvailableCourseCatalog,
   matchCatalogEntriesForProfile,
   type CatalogCourseEntry,
@@ -129,7 +130,7 @@ export function ProfileModal({
   profile: UserProfile;
   onSaveProfile: (
     next: UserProfile,
-    options?: { autoLoadCourses: boolean }
+    options?: { autoLoadCourses: boolean; autoLoadExtracurricular: boolean }
   ) => void | Promise<void>;
   onClearProfile: () => void;
 }) {
@@ -142,6 +143,7 @@ export function ProfileModal({
   const [customGrade, setCustomGrade] = useState('');
   const [useCustomGrade, setUseCustomGrade] = useState(false);
   const [autoLoadCourses, setAutoLoadCourses] = useState(true);
+  const [autoLoadExtracurricular, setAutoLoadExtracurricular] = useState(true);
   const [catalogEntries, setCatalogEntries] = useState<CatalogCourseEntry[]>(
     BUILTIN_COURSE_CATALOG
   );
@@ -272,7 +274,7 @@ export function ProfileModal({
           grade: resolvedGrade,
           updatedAt: Date.now(),
         },
-        { autoLoadCourses }
+        { autoLoadCourses, autoLoadExtracurricular }
       );
       setSavedNotice(true);
     } finally {
@@ -282,10 +284,19 @@ export function ProfileModal({
 
   const previewLevelLabel = getEducationLevelLabel(educationLevel);
   const previewGrade = useCustomGrade ? customGrade.trim() : grade.trim();
-  const matchedCourses = matchCatalogEntriesForProfile(catalogEntries, {
-    educationLevel,
-    grade: previewGrade,
-  });
+  const matchedCurricular = matchCatalogEntriesForProfile(
+    catalogEntries,
+    { educationLevel, grade: previewGrade },
+    { includeCurricular: true, includeExtracurricular: false }
+  );
+  const matchedExtracurricular = matchCatalogEntriesForProfile(
+    catalogEntries,
+    { educationLevel, grade: previewGrade },
+    { includeCurricular: false, includeExtracurricular: true }
+  ).filter((c) => isCatalogEntryExtracurricular(c));
+  const willAutoLoadAny =
+    (autoLoadCourses && matchedCurricular.length > 0) ||
+    (autoLoadExtracurricular && matchedExtracurricular.length > 0);
 
   return (
     <div
@@ -472,7 +483,7 @@ export function ProfileModal({
 
           {/* Automatic Course Loading Preview */}
           {educationLevel && previewGrade && (
-            <div className="p-3.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 space-y-2">
+            <div className="p-3.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 space-y-2.5">
               <label className="flex items-center gap-2 text-xs sm:text-sm font-bold text-indigo-900 dark:text-indigo-200 cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -481,22 +492,45 @@ export function ProfileModal({
                   onChange={(e) => setAutoLoadCourses(e.target.checked)}
                   className="w-4 h-4 rounded accent-indigo-600"
                 />
-                <span>بارگیری خودکار دروس متناسب با مقطع و پایه پس از ذخیره پروفایل</span>
+                <span>بارگیری خودکار دروس رسمی متناسب با مقطع و پایه</span>
               </label>
 
-              {matchedCourses.length > 0 ? (
-                <div className="text-xs text-indigo-800 dark:text-indigo-300 flex items-start gap-2 pt-0.5">
+              {matchedCurricular.length > 0 ? (
+                <div className="text-xs text-indigo-800 dark:text-indigo-300 flex items-start gap-2 pr-6">
                   <BookOpen className="w-4 h-4 shrink-0 mt-0.5 text-teal-600 dark:text-teal-400" />
                   <span>
-                    دروس آماده برای «{previewLevelLabel} · {previewGrade}»:{' '}
-                    <strong>{matchedCourses.map((c) => c.title).join('، ')}</strong>
+                    دروس رسمی «{previewLevelLabel} · {previewGrade}»:{' '}
+                    <strong>{matchedCurricular.map((c) => c.title).join('، ')}</strong>
                   </span>
                 </div>
               ) : (
-                <div className="text-xs text-slate-600 dark:text-slate-400">
-                  برای «{previewLevelLabel} · {previewGrade}» هنوز بسته خودکاری در مخزن ثبت نشده است؛ پس از ذخیره می‌توانید فایل درس دلخواه را دستی اضافه کنید.
+                <div className="text-xs text-slate-600 dark:text-slate-400 pr-6">
+                  برای «{previewLevelLabel} · {previewGrade}» هنوز درس رسمی در مخزن ثبت نشده است.
                 </div>
               )}
+
+              <div className="pt-2 border-t border-indigo-200/70 dark:border-indigo-800/70 space-y-1.5">
+                <label className="flex items-center gap-2 text-xs sm:text-sm font-bold text-amber-900 dark:text-amber-200 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={autoLoadExtracurricular}
+                    disabled={saving}
+                    onChange={(e) => setAutoLoadExtracurricular(e.target.checked)}
+                    className="w-4 h-4 rounded accent-amber-600"
+                  />
+                  <span>بارگیری دروس فوق‌برنامه (قابل استفاده در تمام مقاطع و پایه‌ها)</span>
+                </label>
+
+                {matchedExtracurricular.length > 0 && (
+                  <div className="text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2 pr-6">
+                    <BookOpen className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                    <span>
+                      فوق‌برنامه همه مقاطع:{' '}
+                      <strong>{matchedExtracurricular.map((c) => c.title).join('، ')}</strong>
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -571,7 +605,7 @@ export function ProfileModal({
                 {saving && <RefreshCw className="w-4 h-4 animate-spin shrink-0" />}
                 <span>
                   {saving
-                    ? autoLoadCourses && matchedCourses.length > 0
+                    ? willAutoLoadAny
                       ? 'در حال ذخیره و بارگیری دروس...'
                       : 'در حال ذخیره...'
                     : 'ذخیره اطلاعات پروفایل'}

@@ -26,9 +26,9 @@ import {
 import { toPersianDigits } from '../utils/mathHelpers';
 import { triggerOfflineHtmlDownload } from './Modals';
 
-export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '2.3.4';
+export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '2.3.5';
 export const APK_VERSION_CODE =
-  typeof __APK_VERSION_CODE__ !== 'undefined' ? __APK_VERSION_CODE__ : 27;
+  typeof __APK_VERSION_CODE__ !== 'undefined' ? __APK_VERSION_CODE__ : 28;
 
 const CATALOG_URL_KEY = 'amoozeshyar_catalog_url_v1';
 const REMOTE_UPDATE_URL_KEY = 'amoozeshyar_update_url_v1';
@@ -795,7 +795,14 @@ export function OnlineUpdateModal({
                         className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2"
                       >
                         <div className="min-w-0">
-                          <div className="font-bold text-xs sm:text-sm truncate">{item.title}</div>
+                          <div className="font-bold text-xs sm:text-sm truncate flex items-center gap-1.5">
+                            <span className="truncate">{item.title}</span>
+                            {item.isExtracurricular && (
+                              <span className="text-[10px] font-bold text-amber-700 dark:text-amber-300 shrink-0">
+                                (فوق‌برنامه · همه مقاطع)
+                              </span>
+                            )}
+                          </div>
                           {item.subtitle && (
                             <div className="text-[11px] text-slate-500 truncate">{item.subtitle}</div>
                           )}

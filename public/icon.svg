@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="ay_bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a8a"/>
+      <stop offset="55%" stop-color="#0f5ea8"/>
+      <stop offset="100%" stop-color="#0d9488"/>
+    </linearGradient>
+    <linearGradient id="ay_gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde68a"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#ay_bg)"/>
+  <rect x="28" y="28" width="456" height="456" rx="92" fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="6"/>
+  <!-- Knowledge Star -->
+  <polygon points="256,74 268,108 304,109 275,130 286,164 256,144 226,164 237,130 208,109 244,108" fill="url(#ay_gold)"/>
+  <!-- Light Rays -->
+  <path d="M256 178 L256 296 M206 188 L240 302 M306 188 L272 302 M162 214 L224 312 M350 214 L288 312" stroke="#ccfbf1" stroke-width="14" stroke-linecap="round" stroke-opacity="0.92"/>
+  <!-- Open Book -->
+  <path d="M104 282 L248 334 L248 418 L104 366 Z" fill="#ffffff" fill-opacity="0.95"/>
+  <path d="M408 282 L264 334 L264 418 L408 366 Z" fill="#e0f2fe" fill-opacity="0.95"/>
+  <path d="M90 302 L90 382 L256 440 L422 382 L422 302" fill="none" stroke="#99f6e4" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

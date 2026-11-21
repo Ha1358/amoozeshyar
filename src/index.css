@@ -1,0 +1,54 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('./assets/fonts/Vazirmatn-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    font-family: 'Vazirmatn', 'Vazir', Tahoma, system-ui, -apple-system, sans-serif;
+  }
+
+  body, button, input, select, textarea, svg text {
+    font-family: 'Vazirmatn', 'Vazir', Tahoma, system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    line-height: 1.85;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Stacked Vertical Fraction Styling */
+.frac {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  vertical-align: middle;
+  margin: 0 4px;
+  line-height: 1.15;
+  direction: ltr;
+  font-weight: 700;
+}
+
+.frac .num {
+  border-bottom: 1.75px solid currentColor;
+  padding: 0 5px 2px 5px;
+  text-align: center;
+  display: block;
+}
+
+.frac .den {
+  padding: 2px 5px 0 5px;
+  text-align: center;
+  display: block;
+}

@@ -1,0 +1,8 @@
+{
+  "appId": "com.amoozeshyar.app",
+  "appName": "آموزش یار",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true
+  }
+}

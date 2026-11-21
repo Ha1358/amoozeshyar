@@ -1,0 +1,20 @@
+{
+  "courses": [
+    {
+      "id": "math_grade8_complete",
+      "title": "ریاضی پایه هشتم (کامل)",
+      "subtitle": "۹ فصل کامل همراه با درسنامه رنگی، آزمایشگاه تعاملی، فرمول‌ها، تمرین و آزمون",
+      "version": "2.3.1",
+      "category": "math",
+      "url": "https://ha1358.github.io/amoozeshyar/courses/math8.json"
+    },
+    {
+      "id": "english_aef1_v3",
+      "title": "زبان انگلیسی (American English File 1)",
+      "subtitle": "۱۲ فصل، ۴۸ درس، ۷۲۰ تمرین تعاملی و آزمون‌ها",
+      "version": "3.0.0",
+      "category": "english",
+      "url": "https://ha1358.github.io/amoozeshyar/courses/aef1-v3.json"
+    }
+  ]
+}

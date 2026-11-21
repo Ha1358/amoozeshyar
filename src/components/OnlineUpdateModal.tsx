@@ -26,9 +26,9 @@ import {
 import { toPersianDigits } from '../utils/mathHelpers';
 import { triggerOfflineHtmlDownload } from './Modals';
 
-export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '2.3.3';
+export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '2.3.4';
 export const APK_VERSION_CODE =
-  typeof __APK_VERSION_CODE__ !== 'undefined' ? __APK_VERSION_CODE__ : 26;
+  typeof __APK_VERSION_CODE__ !== 'undefined' ? __APK_VERSION_CODE__ : 27;
 
 const CATALOG_URL_KEY = 'amoozeshyar_catalog_url_v1';
 const REMOTE_UPDATE_URL_KEY = 'amoozeshyar_update_url_v1';

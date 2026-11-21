@@ -176,6 +176,8 @@ export interface CustomSubjectPackage {
   title: string;
   subtitle: string;
   category?: CourseCategory;
+  educationLevels?: EducationLevelId[];
+  grades?: string[];
   enableCalculator?: boolean;
   enableAudio?: boolean;
   dir?: 'rtl' | 'ltr';

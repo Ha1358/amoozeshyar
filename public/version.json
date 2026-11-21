@@ -1,9 +1,9 @@
 {
   "appName": "آموزش یار",
-  "version": "2.3.3",
-  "versionCode": 26,
+  "version": "2.3.4",
+  "versionCode": 27,
   "releaseDate": "2026-11-21",
   "offlineHtmlUrl": "amoozeshyar-offline.html",
   "apkUrl": "https://github.com/Ha1358/amoozeshyar/releases/latest/download/amoozeshyar.apk",
-  "notes": "آموزش یار نسخه ۲.۳.۳: بارگیری خودکار دروس بر اساس مقطع و پایه تحصیلی بلافاصله پس از تکمیل پروفایل کاربر"
+  "notes": "آموزش یار نسخه ۲.۳.۴: افزودن صفحه اصلی و انتخاب دروس، نمایش دقیق دروس بر اساس مقطع و پایه ثبت‌شده، و نمایش واضح لوگو و منوی بروزرسانی در اپلیکیشن موبایل"
 }

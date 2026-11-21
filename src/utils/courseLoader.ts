@@ -272,6 +272,65 @@ export const BUILTIN_COURSE_CATALOG: CatalogCourseEntry[] = [
   },
 ];
 
+export function attachCourseProfileTags(
+  pkg: CustomSubjectPackage,
+  profile?: Pick<UserProfile, 'educationLevel' | 'grade'>,
+  catalogEntry?: Pick<CatalogCourseEntry, 'educationLevels' | 'grades'>
+): CustomSubjectPackage {
+  const builtinMatch = BUILTIN_COURSE_CATALOG.find((c) => c.id === pkg.id);
+  const resolvedLevels =
+    pkg.educationLevels && pkg.educationLevels.length > 0
+      ? pkg.educationLevels
+      : catalogEntry?.educationLevels && catalogEntry.educationLevels.length > 0
+      ? catalogEntry.educationLevels
+      : builtinMatch?.educationLevels && builtinMatch.educationLevels.length > 0
+      ? builtinMatch.educationLevels
+      : profile?.educationLevel
+      ? [profile.educationLevel]
+      : undefined;
+
+  const resolvedGrades =
+    pkg.grades && pkg.grades.length > 0
+      ? pkg.grades
+      : catalogEntry?.grades && catalogEntry.grades.length > 0
+      ? catalogEntry.grades
+      : builtinMatch?.grades && builtinMatch.grades.length > 0
+      ? builtinMatch.grades
+      : profile?.grade?.trim()
+      ? [profile.grade.trim()]
+      : undefined;
+
+  return {
+    ...pkg,
+    ...(resolvedLevels ? { educationLevels: resolvedLevels } : {}),
+    ...(resolvedGrades ? { grades: resolvedGrades } : {}),
+  };
+}
+
+export function courseMatchesProfile(
+  pkg: CustomSubjectPackage,
+  profile: Pick<UserProfile, 'educationLevel' | 'grade'>
+): boolean {
+  if (!profile.educationLevel || !profile.grade.trim()) return true;
+  const builtinMatch = BUILTIN_COURSE_CATALOG.find((c) => c.id === pkg.id);
+  const levels =
+    pkg.educationLevels && pkg.educationLevels.length > 0
+      ? pkg.educationLevels
+      : builtinMatch?.educationLevels;
+  const grades =
+    pkg.grades && pkg.grades.length > 0 ? pkg.grades : builtinMatch?.grades;
+
+  if (!levels || levels.length === 0) return false;
+  if (!levels.includes(profile.educationLevel as EducationLevelId)) return false;
+  if (!grades || grades.length === 0) return true;
+
+  const normProfileGrade = normalizeMatchText(profile.grade);
+  return grades.some((g) => {
+    const ng = normalizeMatchText(g);
+    return ng === '*' || ng === normProfileGrade;
+  });
+}
+
 function normalizeMatchText(s: string): string {
   return s
     .replace(/ي/g, 'ی')
@@ -392,7 +451,9 @@ export async function autoLoadCoursesForProfile(
       try {
         const res = await fetchCoursesFromUrl(candidate);
         if (res.courses.length > 0) {
-          loadedCourses.push(...res.courses);
+          loadedCourses.push(
+            ...res.courses.map((c) => attachCourseProfileTags(c, profile, entry))
+          );
           audioCandidates.push(...res.audioCandidates);
           fetched = true;
           break;

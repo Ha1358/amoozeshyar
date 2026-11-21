@@ -19,7 +19,7 @@ import type {
   CustomSubjectProgress,
   UserProfile,
 } from '../types/courses';
-import { getEducationLevelLabel, isProfileComplete } from './ProfileModal';
+import { formatProfileSummary, isProfileComplete } from './ProfileModal';
 import {
   evaluateMathDetailed,
   formatPersianDate,
@@ -163,17 +163,24 @@ function ModalBackdrop({
 export function FormulasModal({
   open,
   onClose,
+  courseTitle,
   customFormulas,
 }: {
   open: boolean;
   onClose: () => void;
+  courseTitle?: string;
   customFormulas?: { title: string; items: string[] }[];
 }) {
+  const hasCustom = Boolean(customFormulas && customFormulas.length > 0);
+  const modalTitle = courseTitle
+    ? `برگه فرمول‌ها و نکته‌های کلیدی ${courseTitle}`
+    : 'برگه فرمول‌ها و نکته‌های کلیدی ریاضی';
+
   return (
-    <ModalBackdrop open={open} onClose={onClose} title="برگه فرمول‌ها و نکته‌های کلیدی ریاضی">
-      {customFormulas && customFormulas.length > 0 && (
-        <div className="space-y-3 mb-4">
-          {customFormulas.map((grp, gi) => (
+    <ModalBackdrop open={open} onClose={onClose} title={modalTitle}>
+      {hasCustom ? (
+        <div className="space-y-3">
+          {customFormulas!.map((grp, gi) => (
             <RuleBox key={gi}>
               <strong>{grp.title}</strong>
               <ul className="list-disc pr-5 mt-1.5 space-y-1 text-sm">
@@ -186,7 +193,8 @@ export function FormulasModal({
             </RuleBox>
           ))}
         </div>
-      )}
+      ) : (
+        <>
       <RuleBox>
         <strong>فصل ۱: عددهای صحیح و گویا</strong>
         <ul className="list-disc pr-5 mt-1.5 space-y-1 text-sm">
@@ -269,6 +277,8 @@ export function FormulasModal({
           <li>هر زاویه محاطی روبه‌رو به قطر (نیم‌دایره) دقیقاً <MathBox>90°</MathBox> است.</li>
         </ul>
       </RuleBox>
+        </>
+      )}
     </ModalBackdrop>
   );
 }
@@ -909,7 +919,7 @@ export function DashboardModal({
   };
 
   const hasProfile = isProfileComplete(userProfile);
-  const levelLabel = getEducationLevelLabel(userProfile.educationLevel);
+  const profileSummaryLabel = formatProfileSummary(userProfile);
 
   return (
     <ModalBackdrop open={open} onClose={onClose} title="کارنامه جامع، تاریخچه آزمون و پیشرفت یادگیری">
@@ -925,9 +935,7 @@ export function DashboardModal({
             <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 tabular-nums">
               {hasProfile ? (
                 <>
-                  <span>{levelLabel}</span>
-                  <span className="mx-1.5" aria-hidden="true">·</span>
-                  <span>{userProfile.grade}</span>
+                  <span>{profileSummaryLabel}</span>
                   <span className="mx-1.5" aria-hidden="true">·</span>
                   <span dir="ltr">{toPersianDigits(userProfile.mobile)}</span>
                 </>

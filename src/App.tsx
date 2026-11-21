@@ -85,7 +85,7 @@ import {
 import {
   EMPTY_USER_PROFILE,
   ProfileModal,
-  getEducationLevelLabel,
+  formatProfileSummary,
   isProfileComplete,
   mergeUserProfilePreserving,
 } from './components/ProfileModal';
@@ -171,6 +171,8 @@ export default function App() {
           mobile: parsed.mobile || '',
           educationLevel: parsed.educationLevel || '',
           grade: parsed.grade || '',
+          branch: parsed.branch || '',
+          field: parsed.field || '',
           updatedAt: parsed.updatedAt,
         };
       }
@@ -982,10 +984,8 @@ export default function App() {
                   {userProfile.fullName.trim() || 'پروفایل کاربری (تکمیل اطلاعات)'}
                 </span>
               </span>
-              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 shrink-0">
-                {profileCompleted
-                  ? `${getEducationLevelLabel(userProfile.educationLevel)} · ${userProfile.grade}`
-                  : 'ثبت مشخصات'}
+              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 shrink-0 truncate max-w-[160px]">
+                {profileCompleted ? formatProfileSummary(userProfile) : 'ثبت مشخصات'}
               </span>
             </button>
 
@@ -1144,11 +1144,7 @@ export default function App() {
                       </span>
                       <span className="text-slate-400" aria-hidden="true">·</span>
                       <span className="text-slate-600 dark:text-slate-300">
-                        {getEducationLevelLabel(userProfile.educationLevel)}
-                      </span>
-                      <span className="text-slate-400" aria-hidden="true">·</span>
-                      <span className="text-slate-600 dark:text-slate-300">
-                        {userProfile.grade}
+                        {formatProfileSummary(userProfile)}
                       </span>
                       <span className="hidden sm:inline text-slate-400" aria-hidden="true">·</span>
                       <span dir="ltr" className="hidden sm:inline text-slate-500 dark:text-slate-400">
@@ -1177,9 +1173,7 @@ export default function App() {
               audioMap={audioMap}
               studentName={userProfile.fullName.trim() || undefined}
               studentGradeLabel={
-                profileCompleted
-                  ? `${getEducationLevelLabel(userProfile.educationLevel)} · ${userProfile.grade}`
-                  : undefined
+                profileCompleted ? formatProfileSummary(userProfile) : undefined
               }
               onOpenAudioSetup={() => setActiveModal('audio')}
               onUpdateProgress={(updater) =>
@@ -1262,9 +1256,7 @@ export default function App() {
                     <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 tabular-nums">
                       {profileCompleted ? (
                         <>
-                          <span>{getEducationLevelLabel(userProfile.educationLevel)}</span>
-                          <span className="mx-1.5" aria-hidden="true">·</span>
-                          <span>{userProfile.grade}</span>
+                          <span>{formatProfileSummary(userProfile)}</span>
                           <span className="mx-1.5" aria-hidden="true">·</span>
                           <span dir="ltr">{toPersianDigits(userProfile.mobile)}</span>
                         </>
@@ -1291,7 +1283,7 @@ export default function App() {
                   <BookOpen className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                   <span>
                     {profileCompleted
-                      ? `دروس ${getEducationLevelLabel(userProfile.educationLevel)} · ${userProfile.grade}`
+                      ? `دروس ${formatProfileSummary(userProfile)}`
                       : 'انتخاب دروس'}
                   </span>
                 </h2>
@@ -1308,7 +1300,7 @@ export default function App() {
                     curricularVisibleCourses.length === 0 &&
                     extracurricularVisibleCourses.length > 0 && (
                       <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                        برای «{getEducationLevelLabel(userProfile.educationLevel)} · {userProfile.grade}» هنوز درس رسمی بارگذاری نشده است؛ اما دروس فوق‌برنامه زیر در تمامی مقاطع قابل استفاده هستند.
+                        برای «{formatProfileSummary(userProfile)}» هنوز درس رسمی بارگذاری نشده است؛ اما دروس فوق‌برنامه زیر در تمامی مقاطع قابل استفاده هستند.
                       </div>
                     )}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
@@ -1418,9 +1410,7 @@ export default function App() {
                 <div className="p-6 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-center space-y-2">
                   <p className="font-bold text-sm text-slate-800 dark:text-slate-200">
                     {profileCompleted
-                      ? `در حال حاضر درسی برای «${getEducationLevelLabel(
-                          userProfile.educationLevel
-                        )} · ${userProfile.grade}» بارگذاری نشده است.`
+                      ? `در حال حاضر درسی برای «${formatProfileSummary(userProfile)}» بارگذاری نشده است.`
                       : 'هنوز هیچ درسی بارگذاری نشده است.'}
                   </p>
                   <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-lg mx-auto">
@@ -1517,6 +1507,7 @@ export default function App() {
       <FormulasModal
         open={showCalculator && activeModal === 'formulas'}
         onClose={() => setActiveModal(null)}
+        courseTitle={activeCourse?.title}
         customFormulas={activeCourse?.formulas}
       />
       <ScratchpadModal

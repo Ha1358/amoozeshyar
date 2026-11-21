@@ -9,8 +9,8 @@ import { VitePWA } from 'vite-plugin-pwa';
 const pkgJson = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')
 ) as { version?: string };
-const APP_VERSION = pkgJson.version || '2.3.6';
-const APK_VERSION_CODE = 29;
+const APP_VERSION = pkgJson.version || '2.3.7';
+const APK_VERSION_CODE = 30;
 const rawBase = process.env.GITHUB_PAGES_BASE || '/';
 const PAGES_BASE = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
 

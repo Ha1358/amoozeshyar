@@ -229,6 +229,34 @@ export function AddSubjectModal({
     }
   };
 
+  const handleDownloadMath10 = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const text = await fetchBundledOrRemoteCourseText('math10.json');
+      const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'riazi-1-dahom-nazari.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMsg({
+        ok: true,
+        text: 'فایل بسته جامع ریاضی ۱ (پایه دهم — نظری) دانلود شد؛ اکنون می‌توانید آن را از بخش «انتخاب فایل» بارگذاری کنید.',
+      });
+    } catch {
+      setMsg({
+        ok: false,
+        text: 'در حالت فایل آفلاین، اگر اینترنت قطع است فایل json ریاضی ۱ دهم را از دستگاه خود با دکمه «انتخاب فایل» بارگذاری کنید.',
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleDownloadAef1 = async () => {
     setBusy(true);
     setMsg(null);
@@ -446,7 +474,7 @@ export function AddSubjectModal({
                 <div className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
                   نصب مستقیم دروس رسمی با یک کلیک (از اینترنت):
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <button
                     type="button"
                     disabled={busy}
@@ -454,7 +482,16 @@ export function AddSubjectModal({
                     className="min-h-[38px] px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5"
                   >
                     <Globe className="w-3.5 h-3.5 shrink-0" />
-                    <span>نصب مستقیم ریاضی هشتم</span>
+                    <span>ریاضی هشتم</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => handleFetchFromUrl(`${GITHUB_COURSES_BASE}/math10.json`)}
+                    className="min-h-[38px] px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5"
+                  >
+                    <Globe className="w-3.5 h-3.5 shrink-0" />
+                    <span>ریاضی ۱ دهم</span>
                   </button>
                   <button
                     type="button"
@@ -463,7 +500,7 @@ export function AddSubjectModal({
                     className="min-h-[38px] px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5"
                   >
                     <Globe className="w-3.5 h-3.5 shrink-0" />
-                    <span>نصب زبان AEF 1 (فوق‌برنامه)</span>
+                    <span>زبان AEF 1 (فوق‌برنامه)</span>
                   </button>
                 </div>
               </div>
@@ -490,6 +527,16 @@ export function AddSubjectModal({
             >
               <Download className="w-4 h-4 shrink-0" />
               <span>دانلود فایل آماده درس ریاضی هشتم (آموزش از صفر + تمرین و آزمون)</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={busy}
+              onClick={handleDownloadMath10}
+              className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-950/40 text-blue-800 dark:text-blue-200 font-bold text-xs sm:text-sm hover:bg-blue-100 dark:hover:bg-blue-900/50"
+            >
+              <Download className="w-4 h-4 shrink-0" />
+              <span>دانلود فایل آماده درس ریاضی ۱ پایه دهم (شاخه نظری · ریاضی و تجربی)</span>
             </button>
 
             <button

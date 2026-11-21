@@ -178,6 +178,8 @@ export interface CustomSubjectPackage {
   category?: CourseCategory;
   educationLevels?: EducationLevelId[];
   grades?: string[];
+  branches?: string[];
+  fields?: string[];
   isExtracurricular?: boolean;
   enableCalculator?: boolean;
   enableAudio?: boolean;
@@ -215,6 +217,8 @@ export interface UserProfile {
   mobile: string;
   educationLevel: EducationLevelId | '';
   grade: string;
+  branch?: string;
+  field?: string;
   updatedAt?: number;
 }
 

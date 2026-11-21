@@ -73,16 +73,75 @@ export const EDUCATION_LEVELS: EducationLevelOption[] = [
   },
 ];
 
+export interface HighSchoolBranchOption {
+  id: string;
+  label: string;
+  fields: string[];
+}
+
+export const HIGH_SCHOOL_BRANCHES: HighSchoolBranchOption[] = [
+  {
+    id: 'نظری',
+    label: 'نظری',
+    fields: [
+      'ریاضی و فیزیک',
+      'علوم تجربی',
+      'ادبیات و علوم انسانی',
+      'علوم و معارف اسلامی',
+      'سایر (تایپ دستی)',
+    ],
+  },
+  {
+    id: 'فنی و حرفه‌ای',
+    label: 'فنی و حرفه‌ای',
+    fields: [
+      'شبکه و نرم‌افزار رایانه',
+      'حسابداری',
+      'الکترونیک / الکتروتکنیک',
+      'مکانیک خودرو / ماشین‌ابزار',
+      'معماری داخلی / نقشه‌کشی',
+      'سایر (تایپ دستی)',
+    ],
+  },
+  {
+    id: 'کاردانش',
+    label: 'کاردانش',
+    fields: [
+      'فناوری اطلاعات / رایانه',
+      'امور اداری / حسابداری',
+      'برق و تأسیسات',
+      'هنرهای تجسمی / گرافیک',
+      'سایر (تایپ دستی)',
+    ],
+  },
+];
+
 export const EMPTY_USER_PROFILE: UserProfile = {
   fullName: '',
   mobile: '',
   educationLevel: '',
   grade: '',
+  branch: '',
+  field: '',
 };
 
 export function getEducationLevelLabel(levelId: EducationLevelId | '' | undefined): string {
   if (!levelId) return '';
   return EDUCATION_LEVELS.find((l) => l.id === levelId)?.label ?? '';
+}
+
+export function formatProfileSummary(
+  profile: Pick<UserProfile, 'educationLevel' | 'grade' | 'branch' | 'field'>
+): string {
+  const parts: string[] = [];
+  const lvl = getEducationLevelLabel(profile.educationLevel);
+  if (lvl) parts.push(lvl);
+  if (profile.grade?.trim()) parts.push(profile.grade.trim());
+  if (profile.educationLevel === 'high') {
+    if (profile.branch?.trim()) parts.push(profile.branch.trim());
+    if (profile.field?.trim()) parts.push(profile.field.trim());
+  }
+  return parts.join(' · ');
 }
 
 export function isProfileComplete(profile: UserProfile): boolean {
@@ -104,6 +163,8 @@ export function mergeUserProfilePreserving(
     mobile: current.mobile.trim() ? current.mobile : incoming.mobile || '',
     educationLevel: current.educationLevel || incoming.educationLevel || '',
     grade: current.grade.trim() ? current.grade : incoming.grade || '',
+    branch: current.branch?.trim() ? current.branch : incoming.branch || '',
+    field: current.field?.trim() ? current.field : incoming.field || '',
     updatedAt: current.updatedAt || incoming.updatedAt,
   };
 }
@@ -142,6 +203,10 @@ export function ProfileModal({
   const [grade, setGrade] = useState(profile.grade);
   const [customGrade, setCustomGrade] = useState('');
   const [useCustomGrade, setUseCustomGrade] = useState(false);
+  const [branch, setBranch] = useState(profile.branch || '');
+  const [field, setField] = useState(profile.field || '');
+  const [customField, setCustomField] = useState('');
+  const [useCustomField, setUseCustomField] = useState(false);
   const [autoLoadCourses, setAutoLoadCourses] = useState(true);
   const [autoLoadExtracurricular, setAutoLoadExtracurricular] = useState(true);
   const [catalogEntries, setCatalogEntries] = useState<CatalogCourseEntry[]>(
@@ -169,6 +234,31 @@ export function ProfileModal({
       setCustomGrade('');
       setUseCustomGrade(false);
     }
+
+    if (profile.educationLevel === 'high') {
+      const nextBranch = profile.branch?.trim() || HIGH_SCHOOL_BRANCHES[0].id;
+      const branchObj =
+        HIGH_SCHOOL_BRANCHES.find((b) => b.id === nextBranch) || HIGH_SCHOOL_BRANCHES[0];
+      setBranch(branchObj.id);
+      const rawField = (profile.field || '').trim();
+      const canonicalField =
+        rawField.replace(/\s+/g, ' ') === 'ریاضی فیزیک' ? 'ریاضی و فیزیک' : rawField;
+      if (canonicalField && !branchObj.fields.includes(canonicalField)) {
+        setField('سایر (تایپ دستی)');
+        setCustomField(rawField);
+        setUseCustomField(true);
+      } else {
+        setField(canonicalField || branchObj.fields[0]);
+        setCustomField('');
+        setUseCustomField(false);
+      }
+    } else {
+      setBranch('');
+      setField('');
+      setCustomField('');
+      setUseCustomField(false);
+    }
+
     setErrorMsg(null);
     setSavedNotice(false);
     setConfirmClear(false);
@@ -204,6 +294,10 @@ export function ProfileModal({
 
   const selectedLevelObj = EDUCATION_LEVELS.find((l) => l.id === educationLevel);
   const gradeOptions = selectedLevelObj ? selectedLevelObj.grades : [];
+  const isHighSchool = educationLevel === 'high';
+  const selectedBranchObj =
+    HIGH_SCHOOL_BRANCHES.find((b) => b.id === branch) || HIGH_SCHOOL_BRANCHES[0];
+  const fieldOptions = isHighSchool ? selectedBranchObj.fields : [];
 
   const handleSelectLevel = (nextLevel: EducationLevelId | '') => {
     setEducationLevel(nextLevel);
@@ -214,12 +308,30 @@ export function ProfileModal({
       setGrade('');
       setUseCustomGrade(false);
       setCustomGrade('');
+      setBranch('');
+      setField('');
+      setCustomField('');
+      setUseCustomField(false);
       return;
     }
     if (!nextObj.grades.includes(grade)) {
       setGrade(nextObj.grades[0] ?? '');
       setUseCustomGrade(false);
       setCustomGrade('');
+    }
+    if (nextLevel === 'high') {
+      const defBranch = HIGH_SCHOOL_BRANCHES[0];
+      if (!branch) setBranch(defBranch.id);
+      if (!field) {
+        setField(defBranch.fields[0]);
+        setUseCustomField(false);
+        setCustomField('');
+      }
+    } else {
+      setBranch('');
+      setField('');
+      setCustomField('');
+      setUseCustomField(false);
     }
   };
 
@@ -232,6 +344,29 @@ export function ProfileModal({
     } else {
       setUseCustomGrade(false);
       setCustomGrade('');
+    }
+  };
+
+  const handleSelectBranch = (nextBranch: string) => {
+    setErrorMsg(null);
+    setSavedNotice(false);
+    setBranch(nextBranch);
+    const nextBranchObj =
+      HIGH_SCHOOL_BRANCHES.find((b) => b.id === nextBranch) || HIGH_SCHOOL_BRANCHES[0];
+    setField(nextBranchObj.fields[0] ?? '');
+    setUseCustomField(false);
+    setCustomField('');
+  };
+
+  const handleSelectField = (nextField: string) => {
+    setErrorMsg(null);
+    setSavedNotice(false);
+    setField(nextField);
+    if (nextField === 'سایر (تایپ دستی)') {
+      setUseCustomField(true);
+    } else {
+      setUseCustomField(false);
+      setCustomField('');
     }
   };
 
@@ -264,6 +399,21 @@ export function ProfileModal({
       return;
     }
 
+    let resolvedBranch = '';
+    let resolvedField = '';
+    if (educationLevel === 'high') {
+      resolvedBranch = branch.trim();
+      resolvedField = useCustomField ? customField.trim() : field.trim();
+      if (!resolvedBranch) {
+        setErrorMsg('لطفاً شاخه تحصیلی را انتخاب کنید.');
+        return;
+      }
+      if (!resolvedField) {
+        setErrorMsg('لطفاً رشته تحصیلی را انتخاب یا وارد کنید.');
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       await onSaveProfile(
@@ -272,6 +422,8 @@ export function ProfileModal({
           mobile: normalizedMobile,
           educationLevel,
           grade: resolvedGrade,
+          branch: resolvedBranch,
+          field: resolvedField,
           updatedAt: Date.now(),
         },
         { autoLoadCourses, autoLoadExtracurricular }
@@ -284,14 +436,32 @@ export function ProfileModal({
 
   const previewLevelLabel = getEducationLevelLabel(educationLevel);
   const previewGrade = useCustomGrade ? customGrade.trim() : grade.trim();
+  const previewBranch = isHighSchool ? branch.trim() : '';
+  const previewField = isHighSchool ? (useCustomField ? customField.trim() : field.trim()) : '';
+  const previewFullLabel = formatProfileSummary({
+    educationLevel,
+    grade: previewGrade,
+    branch: previewBranch,
+    field: previewField,
+  });
   const matchedCurricular = matchCatalogEntriesForProfile(
     catalogEntries,
-    { educationLevel, grade: previewGrade },
+    {
+      educationLevel,
+      grade: previewGrade,
+      branch: previewBranch,
+      field: previewField,
+    },
     { includeCurricular: true, includeExtracurricular: false }
   );
   const matchedExtracurricular = matchCatalogEntriesForProfile(
     catalogEntries,
-    { educationLevel, grade: previewGrade },
+    {
+      educationLevel,
+      grade: previewGrade,
+      branch: previewBranch,
+      field: previewField,
+    },
     { includeCurricular: false, includeExtracurricular: true }
   ).filter((c) => isCatalogEntryExtracurricular(c));
   const willAutoLoadAny =
@@ -339,13 +509,7 @@ export function ProfileModal({
                 {fullName.trim() || 'کاربر آموزش یار'}
               </div>
               <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5 tabular-nums">
-                <span>{previewLevelLabel || 'مقطع انتخاب نشده'}</span>
-                {previewGrade && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span>{previewGrade}</span>
-                  </>
-                )}
+                <span>{previewFullLabel || previewLevelLabel || 'مقطع انتخاب نشده'}</span>
                 {mobile.trim() && (
                   <>
                     <span aria-hidden="true">·</span>
@@ -481,6 +645,80 @@ export function ProfileModal({
             </div>
           )}
 
+          {/* Branch & Field for High School ('متوسطه دوم') */}
+          {isHighSchool && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="profile-branch"
+                    className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 mb-1.5"
+                  >
+                    <BookOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <span>شاخه تحصیلی</span>
+                  </label>
+                  <select
+                    id="profile-branch"
+                    value={branch}
+                    onChange={(e) => handleSelectBranch(e.target.value)}
+                    className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {HIGH_SCHOOL_BRANCHES.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="profile-field"
+                    className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 mb-1.5"
+                  >
+                    <Layers className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                    <span>رشته تحصیلی</span>
+                  </label>
+                  <select
+                    id="profile-field"
+                    value={field}
+                    onChange={(e) => handleSelectField(e.target.value)}
+                    className="w-full min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {fieldOptions.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {useCustomField && (
+                <div>
+                  <label
+                    htmlFor="profile-custom-field"
+                    className="block text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 mb-1.5"
+                  >
+                    عنوان رشته دلخواه
+                  </label>
+                  <input
+                    id="profile-custom-field"
+                    type="text"
+                    value={customField}
+                    onChange={(e) => {
+                      setCustomField(e.target.value);
+                      setErrorMsg(null);
+                      setSavedNotice(false);
+                    }}
+                    placeholder="مثال: ریاضی فیزیک یا کامپیوتر"
+                    className="w-full min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Automatic Course Loading Preview */}
           {educationLevel && previewGrade && (
             <div className="p-3.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 space-y-2.5">
@@ -492,20 +730,20 @@ export function ProfileModal({
                   onChange={(e) => setAutoLoadCourses(e.target.checked)}
                   className="w-4 h-4 rounded accent-indigo-600"
                 />
-                <span>بارگیری خودکار دروس رسمی متناسب با مقطع و پایه</span>
+                <span>بارگیری خودکار دروس رسمی متناسب با مقطع، پایه و رشته</span>
               </label>
 
               {matchedCurricular.length > 0 ? (
                 <div className="text-xs text-indigo-800 dark:text-indigo-300 flex items-start gap-2 pr-6">
                   <BookOpen className="w-4 h-4 shrink-0 mt-0.5 text-teal-600 dark:text-teal-400" />
                   <span>
-                    دروس رسمی «{previewLevelLabel} · {previewGrade}»:{' '}
+                    دروس رسمی «{previewFullLabel}»:{' '}
                     <strong>{matchedCurricular.map((c) => c.title).join('، ')}</strong>
                   </span>
                 </div>
               ) : (
                 <div className="text-xs text-slate-600 dark:text-slate-400 pr-6">
-                  برای «{previewLevelLabel} · {previewGrade}» هنوز درس رسمی در مخزن ثبت نشده است.
+                  برای «{previewFullLabel}» هنوز درس رسمی در مخزن ثبت نشده است.
                 </div>
               )}
 

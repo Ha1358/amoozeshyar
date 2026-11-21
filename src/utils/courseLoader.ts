@@ -18,6 +18,8 @@ export interface CatalogCourseEntry {
   localPath?: string;
   educationLevels?: EducationLevelId[];
   grades?: string[];
+  branches?: string[];
+  fields?: string[];
   isExtracurricular?: boolean;
 }
 
@@ -270,6 +272,20 @@ export const BUILTIN_COURSE_CATALOG: CatalogCourseEntry[] = [
     url: 'https://ha1358.github.io/amoozeshyar/courses/math8.json',
   },
   {
+    id: 'math_grade10_riazi1',
+    title: 'ریاضی ۱ — پایه دهم (نظری)',
+    subtitle: 'رشته‌های ریاضی و فیزیک و علوم تجربی · ۷ فصل کامل (۲۳ درس) همراه با درسنامه جامع، فرمول‌ها، تمرین‌های چندسری و آزمون فصل',
+    version: '1.0.0',
+    category: 'math',
+    isExtracurricular: false,
+    educationLevels: ['high'],
+    grades: ['پایه دهم'],
+    branches: ['نظری'],
+    fields: ['ریاضی و فیزیک', 'علوم تجربی'],
+    localPath: 'courses/math10.json',
+    url: 'https://ha1358.github.io/amoozeshyar/courses/math10.json',
+  },
+  {
     id: 'aef1-v3',
     title: 'زبان انگلیسی (American English File 1)',
     subtitle: 'درس فوق‌برنامه (قابل استفاده در تمام مقاطع) · ۱۲ فصل، ۴۸ درس، ۷۲۰ تمرین تعاملی و آزمون‌ها',
@@ -333,8 +349,8 @@ export function isExtracurricularCourse(
 
 export function attachCourseProfileTags(
   pkg: CustomSubjectPackage,
-  profile?: Pick<UserProfile, 'educationLevel' | 'grade'>,
-  catalogEntry?: Pick<CatalogCourseEntry, 'educationLevels' | 'grades' | 'isExtracurricular'>
+  profile?: Pick<UserProfile, 'educationLevel' | 'grade' | 'branch' | 'field'>,
+  catalogEntry?: Pick<CatalogCourseEntry, 'educationLevels' | 'grades' | 'branches' | 'fields' | 'isExtracurricular'>
 ): CustomSubjectPackage {
   const builtinMatch = findBuiltinCatalogEntry(pkg);
   const extracurricular =
@@ -374,17 +390,83 @@ export function attachCourseProfileTags(
       ? [profile.grade.trim()]
       : undefined;
 
+  const resolvedBranches =
+    pkg.branches && pkg.branches.length > 0
+      ? pkg.branches
+      : catalogEntry?.branches && catalogEntry.branches.length > 0
+      ? catalogEntry.branches
+      : builtinMatch?.branches && builtinMatch.branches.length > 0
+      ? builtinMatch.branches
+      : profile?.educationLevel === 'high' && profile?.branch?.trim()
+      ? [profile.branch.trim()]
+      : undefined;
+
+  const resolvedFields =
+    pkg.fields && pkg.fields.length > 0
+      ? pkg.fields
+      : catalogEntry?.fields && catalogEntry.fields.length > 0
+      ? catalogEntry.fields
+      : builtinMatch?.fields && builtinMatch.fields.length > 0
+      ? builtinMatch.fields
+      : profile?.educationLevel === 'high' && profile?.field?.trim()
+      ? [profile.field.trim()]
+      : undefined;
+
   return {
     ...pkg,
     ...(typeof pkg.isExtracurricular === 'boolean' ? { isExtracurricular: pkg.isExtracurricular } : {}),
     ...(resolvedLevels ? { educationLevels: resolvedLevels } : {}),
     ...(resolvedGrades ? { grades: resolvedGrades } : {}),
+    ...(resolvedBranches ? { branches: resolvedBranches } : {}),
+    ...(resolvedFields ? { fields: resolvedFields } : {}),
   };
+}
+
+function normalizeMatchText(s: string): string {
+  return s
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/[–—−]/g, '-')
+    .replace(/\u200c/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeFieldText(s: string): string {
+  return normalizeMatchText(s).replace(/\s+و\s+/g, ' ');
+}
+
+function branchAndFieldMatch(
+  branches: string[] | undefined,
+  fields: string[] | undefined,
+  profile: Pick<UserProfile, 'educationLevel' | 'branch' | 'field'>
+): boolean {
+  if (profile.educationLevel !== 'high') return true;
+
+  if (branches && branches.length > 0 && profile.branch?.trim()) {
+    const normProfileBranch = normalizeMatchText(profile.branch);
+    const branchOk = branches.some((b) => {
+      const nb = normalizeMatchText(b);
+      return nb === '*' || nb === normProfileBranch;
+    });
+    if (!branchOk) return false;
+  }
+
+  if (fields && fields.length > 0 && profile.field?.trim()) {
+    const normProfileField = normalizeFieldText(profile.field);
+    const fieldOk = fields.some((f) => {
+      const nf = normalizeFieldText(f);
+      return nf === '*' || nf === normProfileField;
+    });
+    if (!fieldOk) return false;
+  }
+
+  return true;
 }
 
 export function courseMatchesProfile(
   pkg: CustomSubjectPackage,
-  profile: Pick<UserProfile, 'educationLevel' | 'grade'>
+  profile: Pick<UserProfile, 'educationLevel' | 'grade' | 'branch' | 'field'>
 ): boolean {
   if (!profile.educationLevel || !profile.grade.trim()) return true;
   if (isExtracurricularCourse(pkg)) return true;
@@ -396,30 +478,28 @@ export function courseMatchesProfile(
       : builtinMatch?.educationLevels;
   const grades =
     pkg.grades && pkg.grades.length > 0 ? pkg.grades : builtinMatch?.grades;
+  const branches =
+    pkg.branches && pkg.branches.length > 0 ? pkg.branches : builtinMatch?.branches;
+  const fields =
+    pkg.fields && pkg.fields.length > 0 ? pkg.fields : builtinMatch?.fields;
 
   if (!levels || levels.length === 0) return false;
   if (!levels.includes(profile.educationLevel as EducationLevelId)) return false;
-  if (!grades || grades.length === 0) return true;
+  if (grades && grades.length > 0) {
+    const normProfileGrade = normalizeMatchText(profile.grade);
+    const gradeOk = grades.some((g) => {
+      const ng = normalizeMatchText(g);
+      return ng === '*' || ng === normProfileGrade;
+    });
+    if (!gradeOk) return false;
+  }
 
-  const normProfileGrade = normalizeMatchText(profile.grade);
-  return grades.some((g) => {
-    const ng = normalizeMatchText(g);
-    return ng === '*' || ng === normProfileGrade;
-  });
-}
-
-function normalizeMatchText(s: string): string {
-  return s
-    .replace(/ي/g, 'ی')
-    .replace(/ك/g, 'ک')
-    .replace(/[–—−]/g, '-')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return branchAndFieldMatch(branches, fields, profile);
 }
 
 export function matchCatalogEntriesForProfile(
   entries: CatalogCourseEntry[],
-  profile: Pick<UserProfile, 'educationLevel' | 'grade'>,
+  profile: Pick<UserProfile, 'educationLevel' | 'grade' | 'branch' | 'field'>,
   options?: { includeCurricular?: boolean; includeExtracurricular?: boolean }
 ): CatalogCourseEntry[] {
   if (!profile.educationLevel || !profile.grade.trim()) return [];
@@ -441,13 +521,14 @@ export function matchCatalogEntriesForProfile(
     if (!entry.educationLevels.includes(profile.educationLevel as EducationLevelId)) {
       return false;
     }
-    if (!Array.isArray(entry.grades) || entry.grades.length === 0) {
-      return true;
+    if (Array.isArray(entry.grades) && entry.grades.length > 0) {
+      const gradeOk = entry.grades.some((g) => {
+        const ng = normalizeMatchText(g);
+        return ng === '*' || ng === normGrade;
+      });
+      if (!gradeOk) return false;
     }
-    return entry.grades.some((g) => {
-      const ng = normalizeMatchText(g);
-      return ng === '*' || ng === normGrade;
-    });
+    return branchAndFieldMatch(entry.branches, entry.fields, profile);
   });
 }
 

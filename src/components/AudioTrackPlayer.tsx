@@ -54,12 +54,14 @@ export function AudioTrackCard({
   const [rate, setRate] = useState<0.8 | 1 | 1.2>(1);
   const [showScript, setShowScript] = useState(false);
   const [progressPct, setProgressPct] = useState(0);
+  const [mediaError, setMediaError] = useState(false);
 
   const trackKey = `${track.book ?? 'sb'}:${track.file}:${track.track}:${track.fileName ?? ''}`;
 
   useEffect(() => {
     setPlaying(false);
     setProgressPct(0);
+    setMediaError(false);
     if (mediaRef.current) {
       mediaRef.current.pause();
       mediaRef.current.currentTime = 0;
@@ -73,8 +75,12 @@ export function AudioTrackCard({
       el.pause();
       setPlaying(false);
     } else {
+      setMediaError(false);
       el.playbackRate = rate;
-      el.play().catch(() => setPlaying(false));
+      el.play().catch(() => {
+        setPlaying(false);
+        setMediaError(true);
+      });
       setPlaying(true);
       if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
         try {
@@ -148,6 +154,16 @@ export function AudioTrackCard({
               >
                 {rate}x
               </button>
+              {!localFile && (
+                <button
+                  type="button"
+                  onClick={onOpenAudioSetup}
+                  className="min-h-[38px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 text-xs font-semibold"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span>فایل محلی</span>
+                </button>
+              )}
             </>
           ) : (
             <>
@@ -205,8 +221,16 @@ export function AudioTrackCard({
               src={playableUrl}
               controls
               playsInline
-              onPlay={() => setPlaying(true)}
+              preload="metadata"
+              onPlay={() => {
+                setPlaying(true);
+                setMediaError(false);
+              }}
               onPause={() => setPlaying(false)}
+              onError={() => {
+                setPlaying(false);
+                setMediaError(true);
+              }}
               onTimeUpdate={() => {
                 const el = mediaRef.current;
                 if (el && el.duration) {
@@ -226,6 +250,11 @@ export function AudioTrackCard({
                   mediaRef.current = el;
                 }}
                 src={playableUrl}
+                preload="none"
+                onError={() => {
+                  setPlaying(false);
+                  setMediaError(true);
+                }}
                 onTimeUpdate={() => {
                   const el = mediaRef.current;
                   if (el && el.duration) {
@@ -244,6 +273,22 @@ export function AudioTrackCard({
                 />
               </div>
             </>
+          )}
+          {mediaError && (
+            <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-[11px] sm:text-xs text-amber-800 dark:text-amber-200 flex flex-wrap items-center justify-between gap-2">
+              <span>
+                پخش آنلاین این فایل در حال حاضر ممکن نشد (ممکن است فایل هنوز روی گیت‌هاب آپلود نشده باشد یا اینترنت متصل نباشد).
+              </span>
+              {track.script && (
+                <button
+                  type="button"
+                  onClick={() => speakEnglishText(track.script!, 0.92)}
+                  className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-bold text-[11px]"
+                >
+                  پخش گوینده آفلاین
+                </button>
+              )}
+            </div>
           )}
           <div
             dir="ltr"

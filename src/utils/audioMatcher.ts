@@ -37,7 +37,8 @@ export function normalizeMediaFileKey(fileName: string): string {
   const norm = withoutExt
     .trim()
     .toLowerCase()
-    .replace(/[’‘`]/g, "'")
+    .replace(/[’‘`']/g, '')
+    .replace(/&+/g, '_')
     .replace(/\s+/g, '_');
   return `file:${norm}`;
 }

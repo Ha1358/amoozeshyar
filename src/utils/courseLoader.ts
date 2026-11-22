@@ -289,7 +289,7 @@ export const BUILTIN_COURSE_CATALOG: CatalogCourseEntry[] = [
     id: 'aef1-v3',
     title: 'زبان انگلیسی (American English File 1)',
     subtitle: 'درس فوق‌برنامه (قابل استفاده در تمام مقاطع) · ۱۲ فصل، ۴۸ درس، ۷۲۰ تمرین تعاملی و آزمون‌ها',
-    version: '3.0.0',
+    version: '3.0.1',
     category: 'english',
     isExtracurricular: true,
     educationLevels: ALL_EDUCATION_LEVELS,

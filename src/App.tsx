@@ -15,8 +15,6 @@ import {
   PlusCircle,
   Headphones,
   RefreshCw,
-  FolderOpen,
-  Globe,
   User,
   Home,
   ArrowLeft,
@@ -24,6 +22,7 @@ import {
   GraduationCap,
   Sparkles,
   Info,
+  AlertTriangle,
 } from 'lucide-react';
 import appLogoUrl from './assets/images/app-logo.png';
 import type {
@@ -34,7 +33,9 @@ import type {
   UserProfile,
 } from './types/courses';
 import {
+  bindOnlineCourseMediaUrls,
   extractAudioCandidatesFromFiles,
+  fetchAudioZipFromUrl,
   indexAudioItems,
   type AudioBookType,
   type AudioCandidateItem,
@@ -70,6 +71,7 @@ import {
 } from './components/OnlineUpdateModal';
 import {
   detectPlatformEnv,
+  performAndroidExit,
   requestPersistentStorage,
   setupAndroidBackNavigation,
   triggerOneClickApkDownload,
@@ -207,6 +209,12 @@ export default function App() {
     null
   );
   const [oneClickUpdating, setOneClickUpdating] = useState(false);
+  const [apkBannerProgress, setApkBannerProgress] = useState<{
+    percent: number;
+    status: string;
+  } | null>(null);
+  const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
+  const courseStepBackRef = useRef<() => boolean>(() => false);
 
   const [activeModal, setActiveModal] = useState<
     | 'formulas'
@@ -225,7 +233,8 @@ export default function App() {
   const hasUpdateAvailable = remoteUpdateStatus?.type === 'available';
 
   const profileCompleted = isProfileComplete(userProfile);
-  const visibleCourses = profileCompleted
+  const hasEduProfile = Boolean(userProfile.educationLevel && userProfile.grade.trim());
+  const visibleCourses = hasEduProfile
     ? courses.filter((c) => courseMatchesProfile(c, userProfile))
     : courses;
   const curricularVisibleCourses = visibleCourses.filter((c) => !isExtracurricularCourse(c));
@@ -384,32 +393,67 @@ export default function App() {
   }, []);
 
   // Android Hardware Back Button & Mobile Popstate Navigation Guard
-  const navStateRef = useRef({
+  const navStateRef = useRef<{
+    hasOverlay: boolean;
+    isInsideCourse: boolean;
+    isExitOpen: boolean;
+    closeOverlay: () => void;
+    goHome: () => void;
+    stepBackCourse: () => boolean;
+    openExitPrompt: () => void;
+    closeExitPrompt: () => void;
+  }>({
     hasOverlay: false,
     isInsideCourse: false,
+    isExitOpen: false,
     closeOverlay: () => {},
     goHome: () => {},
+    stepBackCourse: () => false,
+    openExitPrompt: () => {},
+    closeExitPrompt: () => {},
   });
   navStateRef.current = {
     hasOverlay: activeModal !== null || mobileMenuOpen,
     isInsideCourse: activeCourseId !== null,
+    isExitOpen: exitConfirmOpen,
     closeOverlay: () => {
       if (activeModal !== null) setActiveModal(null);
       else if (mobileMenuOpen) setMobileMenuOpen(false);
     },
     goHome: () => setActiveCourseId(null),
+    stepBackCourse: () => courseStepBackRef.current(),
+    openExitPrompt: () => setExitConfirmOpen(true),
+    closeExitPrompt: () => setExitConfirmOpen(false),
   };
 
   useEffect(() => {
     return setupAndroidBackNavigation({
       canCloseOverlay: () => navStateRef.current.hasOverlay,
       closeOverlay: () => navStateRef.current.closeOverlay(),
+      stepBackInCourse: () => navStateRef.current.stepBackCourse(),
       isInsideCourse: () => navStateRef.current.isInsideCourse,
       goHome: () => navStateRef.current.goHome(),
-      onConfirmExitPrompt: () => {
-        showToastMsg(true, 'برای خروج از برنامه، دکمه بازگشت را یک بار دیگر بزنید.');
-      },
+      isExitPromptOpen: () => navStateRef.current.isExitOpen,
+      closeExitPrompt: () => navStateRef.current.closeExitPrompt(),
+      openExitPrompt: () => navStateRef.current.openExitPrompt(),
     });
+  }, []);
+
+  useEffect(() => {
+    const onProgress = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ percent?: number; status?: string; done?: boolean; error?: boolean }>).detail;
+      if (!detail) return;
+      const pct = Math.max(0, Math.min(100, Number(detail.percent ?? 0)));
+      setApkBannerProgress({
+        percent: pct,
+        status: detail.status || 'در حال دریافت و آماده‌سازی نصب...',
+      });
+      if (detail.done || detail.error) {
+        setOneClickUpdating(false);
+      }
+    };
+    window.addEventListener('amoozeshyar-apk-progress', onProgress);
+    return () => window.removeEventListener('amoozeshyar-apk-progress', onProgress);
   }, []);
 
   const handleOneClickBannerUpdate = async () => {
@@ -475,7 +519,7 @@ export default function App() {
     meta?: { targetCourseId?: string; stayOnHome?: boolean }
   ) => {
     const taggedIncoming = incomingCourses.map((c) =>
-      attachCourseProfileTags(c, profileCompleted ? userProfile : undefined)
+      attachCourseProfileTags(c, hasEduProfile ? userProfile : undefined)
     );
     const { nextCourses, updatedIds, addedIds } = mergeCoursesPreservingMetadata(
       courses,
@@ -487,7 +531,7 @@ export default function App() {
     if (!meta?.stayOnHome) {
       const firstTarget = meta?.targetCourseId || addedIds[0] || updatedIds[0];
       const targetPkg = nextCourses.find((c) => c.id === firstTarget);
-      if (firstTarget && targetPkg && (!profileCompleted || courseMatchesProfile(targetPkg, userProfile))) {
+      if (firstTarget && targetPkg && (!hasEduProfile || courseMatchesProfile(targetPkg, userProfile))) {
         setActiveCourseId(firstTarget);
       }
     }
@@ -523,6 +567,89 @@ export default function App() {
     Object.values(audioMap.tracks).forEach((t) => URL.revokeObjectURL(t.url));
     setAudioMap({ tracks: {}, sbCount: 0, wbCount: 0, videoCount: 0 });
     void clearAudioTracksDB();
+  };
+
+  const handleBindOnlineMedia = async (baseUrl: string) => {
+    const targets = courses.filter((c) => hasAudioSupport(c));
+    if (targets.length === 0) {
+      return {
+        ok: false,
+        msg: 'ابتدا یک درس دارای محتوای صوتی یا تصویری (مانند زبان انگلیسی) اضافه کنید.',
+        sbCount: 0,
+        wbCount: 0,
+        videoCount: 0,
+      };
+    }
+
+    let totalSb = 0;
+    let totalWb = 0;
+    let totalVideo = 0;
+    let sampleUrl: string | undefined;
+
+    const updatedMap = new Map<string, CustomSubjectPackage>();
+    for (const c of targets) {
+      const res = bindOnlineCourseMediaUrls(c, baseUrl);
+      updatedMap.set(c.id, res.updatedPkg);
+      totalSb += res.sbOnlineCount;
+      totalWb += res.wbOnlineCount;
+      totalVideo += res.videoOnlineCount;
+      if (!sampleUrl && res.sampleUrl) sampleUrl = res.sampleUrl;
+    }
+
+    setCourses((prev) => prev.map((c) => updatedMap.get(c.id) ?? c));
+
+    let reachable = true;
+    if (sampleUrl && !isOffline) {
+      try {
+        const probe = await fetch(sampleUrl, { method: 'HEAD', cache: 'no-store' });
+        reachable = probe.ok;
+      } catch {
+        reachable = false;
+      }
+    }
+
+    const total = totalSb + totalWb + totalVideo;
+    if (total === 0) {
+      return {
+        ok: false,
+        msg: 'مسیر فایل صوتی یا تصویری برای این درس پیدا نشد.',
+        sbCount: 0,
+        wbCount: 0,
+        videoCount: 0,
+      };
+    }
+
+    return {
+      ok: true,
+      msg: reachable
+        ? `${toPersianDigits(total)} فایل صوتی و تصویری با موفقیت به سرور اینترنتی متصل و آزمایش شد.`
+        : `${toPersianDigits(total)} مسیر اینترنتی متصل شد (برای پخش به اتصال اینترنت نیاز است).`,
+      sbCount: totalSb,
+      wbCount: totalWb,
+      videoCount: totalVideo,
+    };
+  };
+
+  const handleImportAudioZipUrl = async (zipUrl: string) => {
+    if (isOffline) {
+      return { ok: false, msg: 'برای دریافت بسته فشرده صوتی به اتصال اینترنت نیاز دارید.' };
+    }
+    try {
+      const candidates = await fetchAudioZipFromUrl(zipUrl);
+      if (candidates.length === 0) {
+        return { ok: false, msg: 'در فایل ZIP دریافت‌شده، فایل صوتی یا ویدیویی معتبری پیدا نشد.' };
+      }
+      const matched = await applyIndexedAudioCandidates(candidates);
+      return {
+        ok: true,
+        msg: `${toPersianDigits(matched)} فایل صوتی و تصویری دریافت و به‌صورت آفلاین ذخیره شد.`,
+      };
+    } catch {
+      return {
+        ok: false,
+        msg: 'خطا در دریافت یا استخراج فایل ZIP از لینک اینترنتی واردشده.',
+      };
+    }
   };
 
   const buildBackupBundle = (): AppBackupBundle => {
@@ -752,7 +879,7 @@ export default function App() {
               }`}
             >
               <RefreshCw className="w-4 h-4" />
-              <span>{hasUpdateAvailable ? 'نسخه جدید!' : 'بروزرسانی و دروس'}</span>
+              <span>{hasUpdateAvailable ? 'نسخه جدید!' : 'بروزرسانی'}</span>
             </button>
             <button
               type="button"
@@ -815,7 +942,7 @@ export default function App() {
               className="min-h-[38px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-colors whitespace-nowrap shrink-0"
             >
               <PlusCircle className="w-4 h-4 shrink-0" />
-              <span>افزودن درس</span>
+              <span>مدیریت دروس</span>
             </button>
           </nav>
 
@@ -824,7 +951,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveModal('onlineUpdate')}
-              aria-label="بروزرسانی برنامه و بارگذاری دروس"
+              aria-label="بروزرسانی برنامه"
               className={`min-h-[40px] px-2.5 py-1.5 rounded-xl border inline-flex items-center gap-1 text-xs font-bold whitespace-nowrap shrink-0 ${
                 hasUpdateAvailable
                   ? 'border-emerald-500 bg-emerald-600 text-white'
@@ -856,12 +983,12 @@ export default function App() {
                   setAddSubjectMode('local');
                   setActiveModal('addSubject');
                 }}
-                aria-label="افزودن درس جدید"
-                title="افزودن درس"
+                aria-label="مدیریت و بارگذاری دروس"
+                title="صفحه دروس"
                 className="min-w-[40px] min-h-[40px] px-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white inline-flex items-center justify-center gap-1 text-xs font-bold shrink-0"
               >
                 <PlusCircle className="w-4 h-4 shrink-0" />
-                <span className="hidden xs:inline">درس</span>
+                <span className="hidden xs:inline">دروس</span>
               </button>
             )}
 
@@ -877,7 +1004,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Loaded Courses Switcher Strip (Shown inside active course or when courses exist for current profile) */}
+        {/* Loaded Courses Switcher Strip + Math Calculator / Formulas Shortcuts (Zero overlap!) */}
         {visibleCourses.length > 0 && activeCourse && (
           <div className="bg-slate-50 dark:bg-slate-950/60 border-t border-slate-200 dark:border-slate-800">
             <div className="max-w-6xl mx-auto px-3 sm:px-4 py-2 flex items-center gap-2 overflow-x-auto">
@@ -889,6 +1016,27 @@ export default function App() {
                 <Home className="w-4 h-4 shrink-0 text-blue-600 dark:text-blue-400" />
                 <span>صفحه اصلی</span>
               </button>
+
+              {showCalculator && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setActiveModal('scratchpad')}
+                    className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap shrink-0 bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    <Calculator className="w-4 h-4 shrink-0" />
+                    <span>ماشین‌حساب</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveModal('formulas')}
+                    className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap shrink-0 border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300"
+                  >
+                    <FileText className="w-4 h-4 shrink-0" />
+                    <span>فرمول‌ها</span>
+                  </button>
+                </>
+              )}
 
               {visibleCourses.map((cs) => (
                 <button
@@ -919,7 +1067,7 @@ export default function App() {
                 className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs sm:text-sm font-bold whitespace-nowrap shrink-0 border border-dashed border-blue-400 dark:border-blue-600 text-blue-700 dark:text-blue-300 bg-blue-50/70 dark:bg-blue-950/30 hover:bg-blue-100"
               >
                 <PlusCircle className="w-4 h-4 shrink-0" />
-                <span>افزودن درس</span>
+                <span>مدیریت دروس</span>
               </button>
             </div>
           </div>
@@ -938,7 +1086,7 @@ export default function App() {
             >
               <span className="flex items-center gap-2">
                 <RefreshCw className="w-4 h-4 shrink-0" />
-                <span>بروزرسانی برنامه و دریافت دروس</span>
+                <span>بروزرسانی برنامه و پشتیبان</span>
               </span>
               <span className="text-[11px] opacity-90" dir="ltr">
                 v{APP_VERSION}
@@ -954,7 +1102,7 @@ export default function App() {
               className="min-h-[44px] flex items-center gap-2 px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
             >
               <Home className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
-              صفحه اصلی و دروس
+              صفحه اصلی
             </button>
 
             <button
@@ -967,7 +1115,7 @@ export default function App() {
               className="min-h-[44px] flex items-center gap-2 px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-blue-700 dark:text-blue-300"
             >
               <PlusCircle className="w-4 h-4 shrink-0" />
-              افزودن درس جدید
+              صفحه دروس
             </button>
 
             <button
@@ -1173,9 +1321,16 @@ export default function App() {
               audioMap={audioMap}
               studentName={userProfile.fullName.trim() || undefined}
               studentGradeLabel={
-                profileCompleted ? formatProfileSummary(userProfile) : undefined
+                hasEduProfile ? formatProfileSummary(userProfile) : undefined
               }
               onOpenAudioSetup={() => setActiveModal('audio')}
+              onOpenCalculator={() => setActiveModal('scratchpad')}
+              onOpenFormulas={() => setActiveModal('formulas')}
+              onOpenCoursesPage={() => {
+                setAddSubjectMode('local');
+                setActiveModal('addSubject');
+              }}
+              stepBackRef={courseStepBackRef}
               onUpdateProgress={(updater) =>
                 setProgressMap((prev) => ({
                   ...prev,
@@ -1197,28 +1352,44 @@ export default function App() {
           /* Home Page & Course Selection */
           <div className="max-w-4xl mx-auto space-y-5">
             {hasUpdateAvailable && remoteUpdateStatus && (
-              <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 flex flex-wrap items-center justify-between gap-3">
-                <div className="space-y-0.5 min-w-0">
-                  <div className="font-bold text-xs sm:text-sm text-emerald-900 dark:text-emerald-200">
-                    نسخه جدید آموزش یار ({toPersianDigits(remoteUpdateStatus.remoteVersion || '')}) آماده است!
+              <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="space-y-0.5 min-w-0">
+                    <div className="font-bold text-xs sm:text-sm text-emerald-900 dark:text-emerald-200">
+                      نسخه جدید آموزش یار ({toPersianDigits(remoteUpdateStatus.remoteVersion || '')}) آماده است!
+                    </div>
+                    {remoteUpdateStatus.notes && (
+                      <p className="text-[11px] sm:text-xs text-emerald-800 dark:text-emerald-300 line-clamp-2">
+                        {remoteUpdateStatus.notes}
+                      </p>
+                    )}
                   </div>
-                  {remoteUpdateStatus.notes && (
-                    <p className="text-[11px] sm:text-xs text-emerald-800 dark:text-emerald-300 line-clamp-2">
-                      {remoteUpdateStatus.notes}
-                    </p>
-                  )}
+                  <button
+                    type="button"
+                    disabled={oneClickUpdating}
+                    onClick={handleOneClickBannerUpdate}
+                    className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs sm:text-sm font-bold shrink-0 shadow-sm"
+                  >
+                    <RefreshCw className={`w-4 h-4 shrink-0 ${oneClickUpdating ? 'animate-spin' : ''}`} />
+                    <span>
+                      {oneClickUpdating ? 'در حال دریافت...' : 'بروزرسانی با یک کلیک'}
+                    </span>
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  disabled={oneClickUpdating}
-                  onClick={handleOneClickBannerUpdate}
-                  className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs sm:text-sm font-bold shrink-0 shadow-sm"
-                >
-                  <RefreshCw className={`w-4 h-4 shrink-0 ${oneClickUpdating ? 'animate-spin' : ''}`} />
-                  <span>
-                    {oneClickUpdating ? 'در حال دریافت...' : 'دانلود و بروزرسانی با یک کلیک'}
-                  </span>
-                </button>
+                {apkBannerProgress && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[11px] font-bold text-emerald-900 dark:text-emerald-200 tabular-nums">
+                      <span>{apkBannerProgress.status}</span>
+                      <span>{toPersianDigits(apkBannerProgress.percent)}٪</span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-emerald-200 dark:bg-emerald-900 overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-600 transition-all duration-300"
+                        style={{ width: `${apkBannerProgress.percent}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             {/* Hero & Student Profile Card */}
@@ -1238,7 +1409,7 @@ export default function App() {
                     به آموزش یار خوش آمدید
                   </h1>
                   <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-                    پس از تکمیل پروفایل، فقط دروس متناسب با مقطع و پایه تحصیلی شما نمایش داده می‌شوند. از کارت‌های زیر درس مورد نظر خود را انتخاب کنید یا بسته‌های جدید را اضافه نمایید.
+                    دروس بر اساس مقطع و پایه تحصیلی پروفایل شما نمایش داده می‌شوند. از کارت‌های زیر درس مورد نظر خود را باز کنید.
                   </p>
                 </div>
               </div>
@@ -1254,11 +1425,15 @@ export default function App() {
                       {userProfile.fullName.trim() || 'پروفایل کاربری'}
                     </div>
                     <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-                      {profileCompleted ? (
+                      {hasEduProfile ? (
                         <>
                           <span>{formatProfileSummary(userProfile)}</span>
-                          <span className="mx-1.5" aria-hidden="true">·</span>
-                          <span dir="ltr">{toPersianDigits(userProfile.mobile)}</span>
+                          {userProfile.mobile.trim() && (
+                            <>
+                              <span className="mx-1.5" aria-hidden="true">·</span>
+                              <span dir="ltr">{toPersianDigits(userProfile.mobile)}</span>
+                            </>
+                          )}
                         </>
                       ) : (
                         <span>نام، شماره موبایل، مقطع و پایه تحصیلی خود را ثبت کنید</span>
@@ -1271,7 +1446,7 @@ export default function App() {
                   onClick={() => setActiveModal('profile')}
                   className="min-h-[40px] px-4 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shrink-0 transition-colors"
                 >
-                  {profileCompleted ? 'ویرایش پروفایل / تغییر پایه' : 'تکمیل پروفایل'}
+                  {hasEduProfile ? 'ویرایش پروفایل / تغییر پایه' : 'تکمیل پروفایل'}
                 </button>
               </div>
             </section>
@@ -1282,16 +1457,29 @@ export default function App() {
                 <h2 className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                   <BookOpen className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                   <span>
-                    {profileCompleted
+                    {hasEduProfile
                       ? `دروس ${formatProfileSummary(userProfile)}`
-                      : 'انتخاب دروس'}
+                      : 'دروس من'}
                   </span>
                 </h2>
-                {visibleCourses.length > 0 && (
-                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400 tabular-nums">
-                    {toPersianDigits(visibleCourses.length)} درس آماده
-                  </span>
-                )}
+                <div className="flex items-center gap-2">
+                  {visibleCourses.length > 0 && (
+                    <span className="text-xs font-bold text-slate-500 dark:text-slate-400 tabular-nums">
+                      {toPersianDigits(visibleCourses.length)} درس آماده
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddSubjectMode('local');
+                      setActiveModal('addSubject');
+                    }}
+                    className="min-h-[36px] inline-flex items-center gap-1.5 px-3 py-1 rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-xs font-bold"
+                  >
+                    <PlusCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>مدیریت دروس</span>
+                  </button>
+                </div>
               </div>
 
               {visibleCourses.length > 0 ? (
@@ -1407,55 +1595,40 @@ export default function App() {
                   </div>
                 </div>
               ) : (
-                <div className="p-6 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-center space-y-2">
+                <div className="p-6 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 text-center space-y-3">
                   <p className="font-bold text-sm text-slate-800 dark:text-slate-200">
-                    {profileCompleted
+                    {hasEduProfile
                       ? `در حال حاضر درسی برای «${formatProfileSummary(userProfile)}» بارگذاری نشده است.`
-                      : 'هنوز هیچ درسی بارگذاری نشده است.'}
+                      : 'هنوز پروفایل تحصیلی یا درسی ثبت نشده است.'}
                   </p>
                   <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-lg mx-auto">
-                    {profileCompleted
-                      ? 'برای حفظ نظم آموزشی، دروس سایر مقاطع نمایش داده نمی‌شوند. می‌توانید پایه دیگری را در پروفایل انتخاب کنید یا بسته درسی همین پایه را از مسیر محلی یا اینترنت اضافه نمایید.'
-                      : 'با تکمیل پروفایل، دروس متناسب با پایه و مقطع شما به‌صورت خودکار دریافت و در همین بخش نمایش داده می‌شوند.'}
+                    {hasEduProfile
+                      ? 'فقط دروس متناسب با پروفایل شما در اینجا نمایش داده می‌شوند. برای افزودن بسته درسی، وارد صفحه دروس شوید.'
+                      : 'با تکمیل پروفایل و انتخاب پایه تحصیلی، دروس متناسب با پایه شما به‌صورت خودکار دریافت و در اینجا نمایش داده می‌شوند.'}
                   </p>
+                  <div className="flex flex-wrap justify-center gap-2 pt-1">
+                    {!hasEduProfile && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveModal('profile')}
+                        className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
+                      >
+                        تکمیل پروفایل تحصیلی
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAddSubjectMode('local');
+                        setActiveModal('addSubject');
+                      }}
+                      className="min-h-[42px] px-4 py-2 rounded-xl border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-300 text-xs font-bold"
+                    >
+                      صفحه بارگذاری و مدیریت دروس
+                    </button>
+                  </div>
                 </div>
               )}
-
-              {/* Quick Actions */}
-              <div className="pt-2 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAddSubjectMode('local');
-                    setActiveModal('addSubject');
-                  }}
-                  className="min-h-[46px] px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-bold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition-colors"
-                >
-                  <FolderOpen className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
-                  <span>بارگذاری از مسیر محلی</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAddSubjectMode('url');
-                    setActiveModal('addSubject');
-                  }}
-                  className="min-h-[46px] px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-bold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition-colors"
-                >
-                  <Globe className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                  <span>بارگذاری از اینترنت</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveModal('onlineUpdate')}
-                  className="min-h-[46px] px-4 py-2.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-indigo-800 dark:text-indigo-200 font-bold text-xs sm:text-sm inline-flex items-center justify-center gap-2 transition-colors"
-                >
-                  <RefreshCw className="w-4 h-4 shrink-0" />
-                  <span>بروزرسانی برنامه / پشتیبان</span>
-                </button>
-              </div>
             </section>
           </div>
         )}
@@ -1476,31 +1649,61 @@ export default function App() {
         </button>
       </footer>
 
-      {/* Persistent Floating Calculator Button (Visible ONLY when active course is Math) */}
-      {showCalculator && (
-        <button
-          type="button"
-          onClick={() => setActiveModal('scratchpad')}
-          title="ماشین‌حساب پیشرفته توان و کسر"
-          aria-label="ماشین‌حساب پیشرفته"
-          className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-[55] min-h-[48px] px-3.5 sm:px-4 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white shadow-xl flex items-center gap-2 font-bold text-xs sm:text-sm transition-transform hover:scale-105"
-        >
-          <Calculator className="w-5 h-5 shrink-0" />
-          <span>ماشین‌حساب</span>
-        </button>
-      )}
-
-      {/* Scroll to Top */}
-      {showFab && (
+      {/* Scroll to Top (Hidden whenever any modal, drawer, or exit confirm dialog is open so nothing ever overlaps) */}
+      {showFab && activeModal === null && !mobileMenuOpen && !exitConfirmOpen && (
         <button
           type="button"
           onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
           title="بازگشت به بالا"
           aria-label="بازگشت به بالا"
-          className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 w-11 h-11 rounded-full bg-slate-800 dark:bg-slate-700 hover:bg-slate-700 text-white shadow-lg flex items-center justify-center z-40 transition-transform hover:scale-105"
+          className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 w-11 h-11 rounded-full bg-slate-800 dark:bg-slate-700 hover:bg-slate-700 text-white shadow-lg flex items-center justify-center z-30 transition-transform hover:scale-105"
         >
           <ArrowUp className="w-5 h-5" />
         </button>
+      )}
+
+      {/* Android Exit Confirmation Dialog */}
+      {exitConfirmOpen && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setExitConfirmOpen(false);
+          }}
+          className="fixed inset-0 z-[60] bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="تأیید خروج از برنامه"
+            className="w-full max-w-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl p-5 space-y-4 shadow-2xl"
+          >
+            <div className="flex items-center gap-2.5 font-bold text-base text-slate-900 dark:text-slate-100">
+              <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+              <span>خروج از برنامه آموزش یار</span>
+            </div>
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              آیا از خروج از برنامه اطمینان دارید؟ تمام دروس، نمرات و پاسخ‌نامه‌های شما به‌صورت خودکار ذخیره شده‌اند.
+            </p>
+            <div className="flex items-center gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setExitConfirmOpen(false)}
+                className="flex-1 min-h-[42px] px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold text-xs sm:text-sm"
+              >
+                بمانم در برنامه
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setExitConfirmOpen(false);
+                  performAndroidExit();
+                }}
+                className="flex-1 min-h-[42px] px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs sm:text-sm"
+              >
+                بله، خروج
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modals */}
@@ -1609,12 +1812,19 @@ export default function App() {
         open={activeModal === 'audio'}
         onClose={() => setActiveModal(null)}
         audioMap={audioMap}
+        activeCourse={activeCourse}
         onUploadFiles={handleAudioUpload}
         onClearAudio={handleClearAudio}
+        onBindOnlineMedia={handleBindOnlineMedia}
+        onImportAudioZipUrl={handleImportAudioZipUrl}
       />
       <AddSubjectModal
         open={activeModal === 'addSubject'}
         initialMode={addSubjectMode}
+        userProfile={userProfile}
+        courses={courses}
+        onSelectCourse={handleSelectCourse}
+        onDeleteCourse={(cid) => setCourses((prev) => prev.filter((item) => item.id !== cid))}
         onClose={() => setActiveModal(null)}
         onLoadedCourses={handleLoadedCourses}
       />
@@ -1622,11 +1832,13 @@ export default function App() {
         open={activeModal === 'onlineUpdate'}
         onClose={() => setActiveModal(null)}
         isOffline={isOffline}
-        courses={courses}
         initialUpdateStatus={remoteUpdateStatus}
         onUpdateStatusChange={setRemoteUpdateStatus}
         onOpenAboutModal={() => setActiveModal('about')}
-        onLoadedCourses={handleLoadedCourses}
+        onOpenCoursesPage={() => {
+          setAddSubjectMode('local');
+          setActiveModal('addSubject');
+        }}
         onExportBackup={handleExportBackup}
         onImportBackupFile={handleImportBackupFile}
         onBuildBackupBundle={buildBackupBundle}

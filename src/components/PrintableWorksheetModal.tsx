@@ -30,6 +30,18 @@ function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;');
 }
 
+function formatMathHtml(text: string): string {
+  const escaped = escapeHtml(text);
+  // Convert numeric/algebraic fractions like -4/5, 1/3, a/b, (-5/6) into stacked .frac markup, avoiding dates/URLs
+  return escaped.replace(
+    /(?<![A-Za-z0-9./:])(-?[0-9۰-۹]+(?:\.[0-9۰-۹]+)?|[a-zA-Z])\s*\/\s*(\([^()/<>]{1,24}\)|-?[0-9۰-۹]+(?:\.[0-9۰-۹]+)?|[a-zA-Z])(?![0-9۰-۹/])/g,
+    (_all, n: string, d: string) => {
+      const cleanD = d.startsWith('(') && d.endsWith(')') ? d.slice(1, -1).trim() : d;
+      return `<span class="frac"><span class="num">${n}</span><span class="den">${cleanD}</span></span>`;
+    }
+  );
+}
+
 function buildStandalonePrintableHtml(params: {
   title: string;
   courseTitle: string;
@@ -50,7 +62,7 @@ function buildStandalonePrintableHtml(params: {
           ? `<div class="opts">${q.options
               .map(
                 (opt, oi) =>
-                  `<div class="opt"><strong>${persianOptLabels[oi] || toPersianDigits(oi + 1)})</strong> ${escapeHtml(
+                  `<div class="opt"><strong>${persianOptLabels[oi] || toPersianDigits(oi + 1)})</strong> ${formatMathHtml(
                     opt
                   )}</div>`
               )
@@ -58,7 +70,7 @@ function buildStandalonePrintableHtml(params: {
           : `<div class="blank-line">پاسخ: ....................................................................................</div>`;
 
       return `<div class="q-item">
-        <div class="q-title">${toPersianDigits(idx + 1)}) ${escapeHtml(q.prompt)}</div>
+        <div class="q-title">${toPersianDigits(idx + 1)}) ${formatMathHtml(q.prompt)}</div>
         ${optsHtml}
       </div>`;
     })
@@ -70,17 +82,17 @@ function buildStandalonePrintableHtml(params: {
         ${questions
           .map(
             (q, idx) => `<div class="ans-item">
-              <div><strong>سؤال ${toPersianDigits(idx + 1)}:</strong> ${escapeHtml(
+              <div><strong>سؤال ${toPersianDigits(idx + 1)}:</strong> ${formatMathHtml(
                 q.correctAnswer || '—'
               )}</div>
               ${
                 q.solutionSteps && q.solutionSteps.length > 0
                   ? `<ol>${q.solutionSteps
-                      .map((st) => `<li>${escapeHtml(st)}</li>`)
+                      .map((st) => `<li>${formatMathHtml(st)}</li>`)
                       .join('')}</ol>`
                   : ''
               }
-              ${q.explain ? `<div class="explain">${escapeHtml(q.explain)}</div>` : ''}
+              ${q.explain ? `<div class="explain">${formatMathHtml(q.explain)}</div>` : ''}
             </div>`
           )
           .join('\n')}
@@ -103,6 +115,28 @@ function buildStandalonePrintableHtml(params: {
     margin: 0;
     padding: 20px;
     line-height: 1.85;
+  }
+  .frac {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    vertical-align: middle;
+    margin: 0 3px;
+    line-height: 1.1;
+    direction: ltr;
+    font-weight: 700;
+    font-size: 0.92em;
+  }
+  .frac .num {
+    border-bottom: 1.5px solid currentColor;
+    padding: 0 4px 2px;
+    text-align: center;
+    min-width: 100%;
+  }
+  .frac .den {
+    padding: 2px 4px 0;
+    text-align: center;
+    min-width: 100%;
   }
   .toolbar {
     max-width: 820px;

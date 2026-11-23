@@ -1,7 +1,7 @@
 {
   "name": "amoozeshyar-app",
   "private": true,
-  "version": "2.3.8",
+  "version": "2.3.9",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "android:copy": "npm run build && npx cap copy android"
+    "android:patch": "node scripts/setup-android-bridge.mjs",
+    "android:copy": "node scripts/setup-android-bridge.mjs && npm run build && npx cap copy android"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

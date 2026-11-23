@@ -5,6 +5,18 @@ export interface PlatformEnvInfo {
   label: string;
 }
 
+export interface NativeApkUpdateBridge {
+  installApkUpdate?: (url: string) => boolean | void;
+  exitApp?: () => void;
+}
+
+declare global {
+  interface Window {
+    AmoozeshyarAndroid?: NativeApkUpdateBridge;
+    __amoozeshyarHandleBack?: () => boolean;
+  }
+}
+
 export function detectPlatformEnv(): PlatformEnvInfo {
   if (typeof window === 'undefined') {
     return {
@@ -19,6 +31,7 @@ export function detectPlatformEnv(): PlatformEnvInfo {
   const isOfflineFile = proto === 'file:' || proto === 'content:';
   const isNativeApk =
     'Capacitor' in window ||
+    'AmoozeshyarAndroid' in window ||
     proto === 'capacitor:' ||
     (host === 'localhost' && !window.location.port);
   const isMobileViewport =
@@ -34,9 +47,14 @@ export function detectPlatformEnv(): PlatformEnvInfo {
   return { isOfflineFile, isNativeApk, isMobileViewport, label };
 }
 
+export function hasNativeApkInstallerBridge(): boolean {
+  return typeof window !== 'undefined' && typeof window.AmoozeshyarAndroid?.installApkUpdate === 'function';
+}
+
 export async function triggerOneClickApkDownload(apkUrl: string): Promise<{
   ok: boolean;
   msg: string;
+  usedNativeInstaller?: boolean;
 }> {
   const cleanUrl = apkUrl.trim();
   if (!cleanUrl) {
@@ -44,6 +62,17 @@ export async function triggerOneClickApkDownload(apkUrl: string): Promise<{
   }
 
   try {
+    // 1) Native Android In-App DownloadManager + FileProvider PackageInstaller Bridge
+    if (typeof window !== 'undefined' && window.AmoozeshyarAndroid?.installApkUpdate) {
+      window.AmoozeshyarAndroid.installApkUpdate(cleanUrl);
+      return {
+        ok: true,
+        usedNativeInstaller: true,
+        msg: 'دریافت نسخه جدید در حال انجام است؛ بلافاصله پس از اتمام دانلود، پنجره نصب داخل برنامه باز می‌شود.',
+      };
+    }
+
+    // 2) Capacitor Browser fallback if available
     const cap = (window as unknown as {
       Capacitor?: {
         Plugins?: {
@@ -56,10 +85,11 @@ export async function triggerOneClickApkDownload(apkUrl: string): Promise<{
       await cap.Plugins.Browser.open({ url: cleanUrl });
       return {
         ok: true,
-        msg: 'دانلود فایل نصبی جدید آغاز شد؛ پس از اتمام دانلود، فایل را باز کرده و روی «نصب / بروزرسانی» بزنید.',
+        msg: 'دریافت فایل نصبی آغاز شد؛ پس از اتمام، روی فایل دانلودشده بزنید تا بدون حذف اطلاعات بروزرسانی شود.',
       };
     }
 
+    // 3) Direct Download link
     const a = document.createElement('a');
     a.href = cleanUrl;
     a.target = '_blank';
@@ -71,13 +101,37 @@ export async function triggerOneClickApkDownload(apkUrl: string): Promise<{
 
     return {
       ok: true,
-      msg: 'درخواست دانلود نسخه جدید ارسال شد؛ پس از دریافت کامل فایل amoozeshyar.apk، آن را اجرا کنید تا بدون حذف اطلاعات نصب شود.',
+      msg: 'درخواست دریافت نسخه جدید (amoozeshyar.apk) ارسال شد؛ پس از دریافت کامل روی آن بزنید تا بروزرسانی انجام شود.',
     };
   } catch {
     return {
       ok: false,
-      msg: 'شروع دانلود خودکار با خطا روبرو شد. اتصال اینترنت و مجوز مرورگر را بررسی کنید.',
+      msg: 'شروع دریافت نسخه جدید با خطا روبرو شد. اتصال اینترنت و مجوز نصب را بررسی کنید.',
     };
+  }
+}
+
+export function performAndroidExit(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (window.AmoozeshyarAndroid?.exitApp) {
+      window.AmoozeshyarAndroid.exitApp();
+      return;
+    }
+    const capApp = (window as unknown as {
+      Capacitor?: {
+        Plugins?: {
+          App?: { exitApp?: () => void };
+        };
+      };
+    }).Capacitor?.Plugins?.App;
+    if (capApp?.exitApp) {
+      capApp.exitApp();
+      return;
+    }
+    window.close();
+  } catch {
+    // Ignore close errors in standard browser tabs
   }
 }
 
@@ -120,47 +174,65 @@ export async function requestPersistentStorage(): Promise<void> {
 export function setupAndroidBackNavigation(handlers: {
   canCloseOverlay: () => boolean;
   closeOverlay: () => void;
+  stepBackInCourse?: () => boolean;
   isInsideCourse: () => boolean;
   goHome: () => void;
-  onConfirmExitPrompt: () => void;
+  isExitPromptOpen: () => boolean;
+  closeExitPrompt: () => void;
+  openExitPrompt: () => void;
 }): () => void {
   if (typeof window === 'undefined') return () => {};
 
-  let lastBackTap = 0;
-
   const handleBackAction = (): boolean => {
+    if (handlers.isExitPromptOpen()) {
+      handlers.closeExitPrompt();
+      return true;
+    }
     if (handlers.canCloseOverlay()) {
       handlers.closeOverlay();
+      return true;
+    }
+    if (handlers.stepBackInCourse?.()) {
       return true;
     }
     if (handlers.isInsideCourse()) {
       handlers.goHome();
       return true;
     }
-    const now = Date.now();
-    if (now - lastBackTap < 2200) {
-      return false;
-    }
-    lastBackTap = now;
-    handlers.onConfirmExitPrompt();
+    // On Home screen: open confirmation modal before exiting
+    handlers.openExitPrompt();
     return true;
   };
+
+  window.__amoozeshyarHandleBack = handleBackAction;
 
   // Keep a lightweight history state when inside APK / mobile PWA
   const env = detectPlatformEnv();
   const useHistoryGuard = env.isNativeApk || env.isMobileViewport;
+  let lastKnownHash = window.location.hash;
 
-  if (useHistoryGuard && window.history.state?.amoozeshyarRoot !== true) {
+  if (useHistoryGuard && window.history.state?.amoozeshyarGuard !== true) {
     try {
-      window.history.replaceState({ amoozeshyarRoot: true }, '');
+      if (window.history.state?.amoozeshyarRoot !== true) {
+        window.history.replaceState({ amoozeshyarRoot: true }, '');
+      }
       window.history.pushState({ amoozeshyarGuard: true }, '');
     } catch {
       // Ignore history API restrictions on file://
     }
   }
 
+  const onHashChange = () => {
+    lastKnownHash = window.location.hash;
+  };
+
   const onPopState = () => {
     if (!useHistoryGuard) return;
+    // CRITICAL FIX: Never treat in-page hash changes as hardware Back presses!
+    if (window.location.hash !== lastKnownHash) {
+      lastKnownHash = window.location.hash;
+      return;
+    }
     const handled = handleBackAction();
     if (handled) {
       try {
@@ -178,6 +250,7 @@ export function setupAndroidBackNavigation(handlers: {
     }
   };
 
+  window.addEventListener('hashchange', onHashChange);
   window.addEventListener('popstate', onPopState);
   document.addEventListener('backbutton', onCordovaBack);
 
@@ -201,7 +274,7 @@ export function setupAndroidBackNavigation(handlers: {
       const listenerOrPromise = capApp.addListener('backButton', () => {
         const handled = handleBackAction();
         if (!handled) {
-          capApp.exitApp?.();
+          performAndroidExit();
         }
       });
       if (listenerOrPromise && typeof (listenerOrPromise as Promise<{ remove: () => void }>).then === 'function') {
@@ -217,6 +290,10 @@ export function setupAndroidBackNavigation(handlers: {
   }
 
   return () => {
+    if (window.__amoozeshyarHandleBack === handleBackAction) {
+      delete window.__amoozeshyarHandleBack;
+    }
+    window.removeEventListener('hashchange', onHashChange);
     window.removeEventListener('popstate', onPopState);
     document.removeEventListener('backbutton', onCordovaBack);
     try {

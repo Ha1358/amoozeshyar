@@ -192,9 +192,34 @@ export interface CustomSubjectPackage {
   chapters: CustomChapterItem[];
 }
 
+export interface SavedQuizAnswerItem {
+  q: string;
+  opts: string[];
+  selectedIndex: number | null;
+  correctIndex: number;
+  explain: string;
+  solutionSteps?: string[];
+}
+
+export interface SavedQuizSheet {
+  id: string;
+  chapterId: number;
+  chapterTitle: string;
+  round: number;
+  score: number;
+  wrongCount: number;
+  unansweredCount: number;
+  total: number;
+  grade20: number;
+  pct: number;
+  timestamp: number;
+  items: SavedQuizAnswerItem[];
+}
+
 export interface CustomSubjectProgress {
   lessonsStudied: Record<string, boolean>;
   exerciseSolved: Record<string, Record<string, boolean>>;
+  exerciseLocked?: Record<string, Record<string, boolean>>;
   quizBest: Record<number, { score: number; total: number; grade20: number }>;
   quizHistory: {
     chapterId: number;
@@ -203,6 +228,7 @@ export interface CustomSubjectProgress {
     grade20: number;
     timestamp: number;
   }[];
+  quizSheets?: SavedQuizSheet[];
 }
 
 export type EducationLevelId =

@@ -8,29 +8,47 @@ import {
   FileArchive,
   UploadCloud,
   Files,
+  Globe,
+  RotateCcw,
+  Link2,
 } from 'lucide-react';
+import type { CustomSubjectPackage } from '../types/courses';
 import {
+  DEFAULT_AEF1_MEDIA_BASE_URL,
+  countOnlineCourseMedia,
   readDroppedFilesAndFolders,
   type LoadedAudioMap,
   type AudioBookType,
 } from '../utils/audioMatcher';
 import { toPersianDigits } from '../utils/mathHelpers';
 
+const MEDIA_BASE_URL_KEY = 'amoozeshyar_media_base_url_v1';
+
 export function AudioLibraryModal({
   open,
   onClose,
   audioMap,
+  activeCourse,
   onUploadFiles,
   onClearAudio,
+  onBindOnlineMedia,
+  onImportAudioZipUrl,
 }: {
   open: boolean;
   onClose: () => void;
   audioMap: LoadedAudioMap;
+  activeCourse?: CustomSubjectPackage | null;
   onUploadFiles: (
     files: FileList | File[],
     book?: AudioBookType
   ) => Promise<{ matched: number; skipped: number }>;
   onClearAudio: () => void;
+  onBindOnlineMedia?: (
+    baseUrl: string
+  ) => Promise<{ ok: boolean; msg: string; sbCount: number; wbCount: number; videoCount: number }>;
+  onImportAudioZipUrl?: (
+    zipUrl: string
+  ) => Promise<{ ok: boolean; msg: string }>;
 }) {
   const allFolderRef = useRef<HTMLInputElement>(null);
   const sbFolderRef = useRef<HTMLInputElement>(null);
@@ -38,11 +56,22 @@ export function AudioLibraryModal({
   const zipInputRef = useRef<HTMLInputElement>(null);
   const multiFileRef = useRef<HTMLInputElement>(null);
 
+  const [sourceTab, setSourceTab] = useState<'online' | 'local'>('online');
+  const [mediaBaseUrl, setMediaBaseUrl] = useState(() => {
+    try {
+      return localStorage.getItem(MEDIA_BASE_URL_KEY) || DEFAULT_AEF1_MEDIA_BASE_URL;
+    } catch {
+      return DEFAULT_AEF1_MEDIA_BASE_URL;
+    }
+  });
+  const [zipUrl, setZipUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   if (!open) return null;
+
+  const onlineCounts = countOnlineCourseMedia(activeCourse);
 
   const processSelection = async (files: FileList | File[] | null, book?: AudioBookType) => {
     if (!files || files.length === 0) return;
@@ -82,6 +111,46 @@ export function AudioLibraryModal({
     await processSelection(files);
   };
 
+  const handleConnectOnlineServer = async () => {
+    if (!onBindOnlineMedia) return;
+    const clean = mediaBaseUrl.trim().replace(/\/+$/, '');
+    if (!clean) {
+      setStatusMsg({ ok: false, text: 'لطفاً آدرس پایه سرور صوت و تصویر را وارد کنید.' });
+      return;
+    }
+    setBusy(true);
+    setStatusMsg({ ok: true, text: 'در حال اتصال آنلاین فایل‌های صوتی و تصویری و بررسی دسترسی...' });
+    try {
+      localStorage.setItem(MEDIA_BASE_URL_KEY, clean);
+    } catch {
+      // Ignore storage error
+    }
+    try {
+      const res = await onBindOnlineMedia(clean);
+      setStatusMsg({ ok: res.ok, text: res.msg });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleFetchOnlineZip = async () => {
+    if (!onImportAudioZipUrl) return;
+    const clean = zipUrl.trim();
+    if (!clean) {
+      setStatusMsg({ ok: false, text: 'لطفاً لینک مستقیم فایل ZIP صوت و تصویر را وارد کنید.' });
+      return;
+    }
+    setBusy(true);
+    setStatusMsg({ ok: true, text: 'در حال دریافت بسته صوتی/تصویری از اینترنت و ذخیره‌سازی...' });
+    try {
+      const res = await onImportAudioZipUrl(clean);
+      setStatusMsg({ ok: res.ok, text: res.msg });
+      if (res.ok) setZipUrl('');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div
       onClick={(e) => {
@@ -92,13 +161,13 @@ export function AudioLibraryModal({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="مدیریت گروهی فایل‌های صوتی کتاب انگلیسی"
+        aria-label="مدیریت فایل‌های صوتی و تصویری دروس"
         className="w-full max-w-2xl max-h-[92vh] flex flex-col bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-t-2xl sm:rounded-2xl shadow-2xl"
       >
         <div className="px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
           <h3 className="font-bold text-sm sm:text-lg flex items-center gap-2">
             <Headphones className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-            <span>مدیریت گروهی فایل‌های صوتی دروس</span>
+            <span>مدیریت فایل‌های صوتی و تصویری درس</span>
           </h3>
           <button
             type="button"
@@ -111,181 +180,304 @@ export function AudioLibraryModal({
         </div>
 
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4 text-xs sm:text-sm leading-relaxed">
-          {/* Connected Counters */}
+          {/* Connected Counters: Online + Local */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 tabular-nums">
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-between">
-              <span className="font-bold">Student Book (SB):</span>
-              <span className="font-bold text-blue-700 dark:text-blue-300 inline-flex items-center gap-1">
-                {audioMap.sbCount > 0 && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-                {toPersianDigits(audioMap.sbCount)} فایل
-              </span>
-            </div>
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-between">
-              <span className="font-bold">Workbook (WB):</span>
-              <span className="font-bold text-teal-700 dark:text-teal-300 inline-flex items-center gap-1">
-                {audioMap.wbCount > 0 && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-                {toPersianDigits(audioMap.wbCount)} فایل
-              </span>
-            </div>
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-between">
-              <span className="font-bold">ویدیوها (MP4):</span>
-              <span className="font-bold text-indigo-700 dark:text-indigo-300 inline-flex items-center gap-1">
-                {audioMap.videoCount > 0 && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-                {toPersianDigits(audioMap.videoCount)} فایل
-              </span>
-            </div>
-          </div>
-
-          {/* Drag & Drop Entire Folder + Unified Root Folder Picker */}
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={handleDrop}
-            className={`p-4 rounded-2xl border-2 border-dashed text-center space-y-3 transition-colors ${
-              dragging
-                ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/40'
-                : 'border-blue-300 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20'
-            }`}
-          >
-            <UploadCloud className="w-8 h-8 mx-auto text-blue-600 dark:text-blue-400" />
-            <div className="font-bold text-sm sm:text-base text-blue-900 dark:text-blue-200">
-              روش سریع یک‌جا: کل پوشه یا فایل ZIP صوت‌ها را رها کنید یا انتخاب کنید
-            </div>
-            <p className="text-xs text-slate-600 dark:text-slate-300">
-              برای سازگاری کامل در اندروید و APK، پوشه صوت‌ها را با نام‌های انگلیسی مانند <code dir="ltr">audio/student_book/</code> و <code dir="ltr">audio/workbook/</code> (یا در قالب <code dir="ltr">course_audio.zip</code>) انتخاب کنید تا همه فایل‌ها خودکار به دروس متصل شوند.
-            </p>
-
-            <div className="flex flex-wrap justify-center gap-2 pt-1">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => allFolderRef.current?.click()}
-                className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs sm:text-sm"
-              >
-                <FolderOpen className="w-4 h-4" />
-                <span>انتخاب یک پوشه کامل (تشخیص خودکار)</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => zipInputRef.current?.click()}
-                className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs sm:text-sm"
-              >
-                <FileArchive className="w-4 h-4" />
-                <span>انتخاب فایل ZIP صوت‌ها (توصیه‌شده در موبایل)</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => multiFileRef.current?.click()}
-                className="min-h-[42px] inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-100 text-xs sm:text-sm font-semibold"
-              >
-                <Files className="w-4 h-4" />
-                <span>انتخاب گروهی چند فایل (Select All)</span>
-              </button>
-            </div>
-
-            {/* Hidden inputs — NO accept attribute on webkitdirectory so browsers keep folder mode */}
-            <input
-              ref={allFolderRef}
-              type="file"
-              multiple
-              // @ts-expect-error webkitdirectory selects entire folder tree
-              webkitdirectory=""
-              directory=""
-              onChange={(e) => {
-                processSelection(e.target.files);
-                e.target.value = '';
-              }}
-              className="hidden"
-            />
-            <input
-              ref={zipInputRef}
-              type="file"
-              multiple
-              accept=".zip,application/zip,application/x-zip-compressed"
-              onChange={(e) => {
-                processSelection(e.target.files);
-                e.target.value = '';
-              }}
-              className="hidden"
-            />
-            <input
-              ref={multiFileRef}
-              type="file"
-              multiple
-              accept="audio/*,video/*,.mp3,.mp4,.zip"
-              onChange={(e) => {
-                processSelection(e.target.files);
-                e.target.value = '';
-              }}
-              className="hidden"
-            />
-          </div>
-
-          {/* Separate Dedicated Folders (SB & WB) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
-              <div className="font-bold text-blue-800 dark:text-blue-300 text-xs sm:text-sm">
-                یا پوشه مجزای Student Book:
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-1">
+              <div className="font-bold flex items-center justify-between">
+                <span>Student Book (SB)</span>
+                {(audioMap.sbCount > 0 || onlineCounts.sbOnlineCount > 0) && (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                )}
               </div>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => sbFolderRef.current?.click()}
-                className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-950/50 border border-blue-300 dark:border-blue-700 text-blue-800 dark:text-blue-200 font-bold text-xs sm:text-sm"
-              >
-                <FolderOpen className="w-4 h-4" />
-                <span>انتخاب پوشه SB</span>
-              </button>
-              <input
-                ref={sbFolderRef}
-                type="file"
-                multiple
-                // @ts-expect-error webkitdirectory selects entire folder
-                webkitdirectory=""
-                directory=""
-                onChange={(e) => {
-                  processSelection(e.target.files, 'sb');
-                  e.target.value = '';
-                }}
-                className="hidden"
-              />
+              <div className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center justify-between">
+                <span>آنلاین: {toPersianDigits(onlineCounts.sbOnlineCount)}</span>
+                <span>محلی: {toPersianDigits(audioMap.sbCount)}</span>
+              </div>
             </div>
 
-            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
-              <div className="font-bold text-teal-800 dark:text-teal-300 text-xs sm:text-sm">
-                یا پوشه مجزای Workbook:
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-1">
+              <div className="font-bold flex items-center justify-between">
+                <span>Workbook (WB)</span>
+                {(audioMap.wbCount > 0 || onlineCounts.wbOnlineCount > 0) && (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                )}
               </div>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => wbFolderRef.current?.click()}
-                className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-teal-50 dark:bg-teal-950/50 border border-teal-300 dark:border-teal-700 text-teal-800 dark:text-teal-200 font-bold text-xs sm:text-sm"
-              >
-                <FolderOpen className="w-4 h-4" />
-                <span>انتخاب پوشه WB</span>
-              </button>
-              <input
-                ref={wbFolderRef}
-                type="file"
-                multiple
-                // @ts-expect-error webkitdirectory selects entire folder
-                webkitdirectory=""
-                directory=""
-                onChange={(e) => {
-                  processSelection(e.target.files, 'wb');
-                  e.target.value = '';
-                }}
-                className="hidden"
-              />
+              <div className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center justify-between">
+                <span>آنلاین: {toPersianDigits(onlineCounts.wbOnlineCount)}</span>
+                <span>محلی: {toPersianDigits(audioMap.wbCount)}</span>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 space-y-1">
+              <div className="font-bold flex items-center justify-between">
+                <span>ویدیوها (MP4)</span>
+                {(audioMap.videoCount > 0 || onlineCounts.videoOnlineCount > 0) && (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                )}
+              </div>
+              <div className="text-[11px] text-slate-600 dark:text-slate-300 flex items-center justify-between">
+                <span>آنلاین: {toPersianDigits(onlineCounts.videoOnlineCount)}</span>
+                <span>محلی: {toPersianDigits(audioMap.videoCount)}</span>
+              </div>
             </div>
           </div>
+
+          {/* Mode Tabs: Online Media vs Local Device Storage */}
+          <div className="grid grid-cols-2 gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setSourceTab('online')}
+              className={`min-h-[42px] rounded-lg font-bold inline-flex items-center justify-center gap-1.5 ${
+                sourceTab === 'online'
+                  ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <Globe className="w-4 h-4 shrink-0" />
+              <span>اتصال و بارگذاری اینترنتی</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSourceTab('local')}
+              className={`min-h-[42px] rounded-lg font-bold inline-flex items-center justify-center gap-1.5 ${
+                sourceTab === 'local'
+                  ? 'bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-300 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <FolderOpen className="w-4 h-4 shrink-0" />
+              <span>از حافظه دستگاه (آفلاین)</span>
+            </button>
+          </div>
+
+          {sourceTab === 'online' ? (
+            <div className="space-y-4">
+              {/* Direct Streaming Base URL Configuration */}
+              <div className="p-4 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                    <Globe className="w-4 h-4 shrink-0" />
+                    <span>پخش و اتصال آنلاین صدا و تصویر از سرور اینترنتی</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMediaBaseUrl(DEFAULT_AEF1_MEDIA_BASE_URL)}
+                    className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 hover:underline"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>آدرس پیش‌فرض گیت‌هاب</span>
+                  </button>
+                </div>
+
+                <p className="text-xs text-slate-600 dark:text-slate-300">
+                  بدون نیاز به اشغال حافظه گوشی، تمامی فایل‌های صوتی (<code dir="ltr">.mp3</code>) و ویدیویی (<code dir="ltr">.mp4</code>) درس زبان مستقیماً از مسیر اینترنتی زیر پخش می‌شوند:
+                </p>
+
+                <input
+                  type="url"
+                  dir="ltr"
+                  value={mediaBaseUrl}
+                  onChange={(e) => setMediaBaseUrl(e.target.value)}
+                  placeholder={DEFAULT_AEF1_MEDIA_BASE_URL}
+                  className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs sm:text-sm text-left"
+                />
+
+                <button
+                  type="button"
+                  disabled={busy || !onBindOnlineMedia}
+                  onClick={handleConnectOnlineServer}
+                  className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs sm:text-sm"
+                >
+                  <Globe className="w-4 h-4 shrink-0" />
+                  <span>{busy ? 'در حال بررسی اتصال...' : 'اتصال و تست فایل‌های صوتی و تصویری از اینترنت'}</span>
+                </button>
+              </div>
+
+              {/* Optional Online Media ZIP Download */}
+              {onImportAudioZipUrl && (
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2.5">
+                  <div className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                    <Link2 className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <span>یا دریافت بسته فشرده صوت/تصویر (.zip) از لینک اینترنتی:</span>
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    اگر لینک مستقیم یک فایل <code dir="ltr">.zip</code> شامل فایل‌های صوتی یا تصویری دارید، اینجا وارد کنید تا دریافت و به‌صورت آفلاین در حافظه برنامه ذخیره شود:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <input
+                      type="url"
+                      dir="ltr"
+                      value={zipUrl}
+                      onChange={(e) => setZipUrl(e.target.value)}
+                      placeholder="https://example.com/aef1-audio.zip"
+                      className="flex-1 min-w-[200px] min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-left"
+                    />
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={handleFetchOnlineZip}
+                      className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold shrink-0"
+                    >
+                      دریافت و ذخیره آفلاین
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Drag & Drop Entire Folder + Unified Root Folder Picker */}
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={handleDrop}
+                className={`p-4 rounded-2xl border-2 border-dashed text-center space-y-3 transition-colors ${
+                  dragging
+                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/40'
+                    : 'border-blue-300 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20'
+                }`}
+              >
+                <UploadCloud className="w-8 h-8 mx-auto text-blue-600 dark:text-blue-400" />
+                <div className="font-bold text-sm sm:text-base text-blue-900 dark:text-blue-200">
+                  روش سریع یک‌جا: کل پوشه یا فایل ZIP صوت‌ها را رها کنید یا انتخاب کنید
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300">
+                  برای سازگاری کامل در اندروید، پوشه صوت‌ها را با نام‌های انگلیسی مانند <code dir="ltr">audio/student_book/</code> و <code dir="ltr">audio/workbook/</code> (یا در قالب <code dir="ltr">course_audio.zip</code>) انتخاب کنید تا همه فایل‌ها خودکار به دروس متصل شوند.
+                </p>
+
+                <div className="flex flex-wrap justify-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => allFolderRef.current?.click()}
+                    className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs sm:text-sm"
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    <span>انتخاب یک پوشه کامل (تشخیص خودکار)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => zipInputRef.current?.click()}
+                    className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs sm:text-sm"
+                  >
+                    <FileArchive className="w-4 h-4" />
+                    <span>انتخاب فایل ZIP صوت‌ها (توصیه‌شده در موبایل)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => multiFileRef.current?.click()}
+                    className="min-h-[42px] inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-100 text-xs sm:text-sm font-semibold"
+                  >
+                    <Files className="w-4 h-4" />
+                    <span>انتخاب گروهی چند فایل (Select All)</span>
+                  </button>
+                </div>
+
+                {/* Hidden inputs — NO accept attribute on webkitdirectory so browsers keep folder mode */}
+                <input
+                  ref={allFolderRef}
+                  type="file"
+                  multiple
+                  // @ts-expect-error webkitdirectory selects entire folder tree
+                  webkitdirectory=""
+                  directory=""
+                  onChange={(e) => {
+                    processSelection(e.target.files);
+                    e.target.value = '';
+                  }}
+                  className="hidden"
+                />
+                <input
+                  ref={zipInputRef}
+                  type="file"
+                  multiple
+                  accept=".zip,application/zip,application/x-zip-compressed"
+                  onChange={(e) => {
+                    processSelection(e.target.files);
+                    e.target.value = '';
+                  }}
+                  className="hidden"
+                />
+                <input
+                  ref={multiFileRef}
+                  type="file"
+                  multiple
+                  accept="audio/*,video/*,.mp3,.mp4,.zip"
+                  onChange={(e) => {
+                    processSelection(e.target.files);
+                    e.target.value = '';
+                  }}
+                  className="hidden"
+                />
+              </div>
+
+              {/* Separate Dedicated Folders (SB & WB) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
+                  <div className="font-bold text-blue-800 dark:text-blue-300 text-xs sm:text-sm">
+                    یا پوشه مجزای Student Book:
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => sbFolderRef.current?.click()}
+                    className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-950/50 border border-blue-300 dark:border-blue-700 text-blue-800 dark:text-blue-200 font-bold text-xs sm:text-sm"
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    <span>انتخاب پوشه SB</span>
+                  </button>
+                  <input
+                    ref={sbFolderRef}
+                    type="file"
+                    multiple
+                    // @ts-expect-error webkitdirectory selects entire folder
+                    webkitdirectory=""
+                    directory=""
+                    onChange={(e) => {
+                      processSelection(e.target.files, 'sb');
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                </div>
+
+                <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
+                  <div className="font-bold text-teal-800 dark:text-teal-300 text-xs sm:text-sm">
+                    یا پوشه مجزای Workbook:
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => wbFolderRef.current?.click()}
+                    className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-teal-50 dark:bg-teal-950/50 border border-teal-300 dark:border-teal-700 text-teal-800 dark:text-teal-200 font-bold text-xs sm:text-sm"
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    <span>انتخاب پوشه WB</span>
+                  </button>
+                  <input
+                    ref={wbFolderRef}
+                    type="file"
+                    multiple
+                    // @ts-expect-error webkitdirectory selects entire folder
+                    webkitdirectory=""
+                    directory=""
+                    onChange={(e) => {
+                      processSelection(e.target.files, 'wb');
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {statusMsg && (
             <div
@@ -300,7 +492,7 @@ export function AudioLibraryModal({
           )}
 
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            ذخیره‌سازی دائمی: پس از یک بار افزودن پوشه یا فایل <code dir="ltr">.zip</code>، تمامی فایل‌های صوتی در حافظه داخلی اپلیکیشن (<code dir="ltr">IndexedDB</code>) ذخیره می‌شوند و حتی پس از بستن و باز کردن دوباره برنامه یا APK هم بدون نیاز به انتخاب مجدد باقی می‌مانند.
+            ذخیره‌سازی دائمی: فایل‌های محلی در حافظه داخلی اپلیکیشن (<code dir="ltr">IndexedDB</code>) ذخیره می‌شوند و لینک‌های اینترنتی بدون مصرف فضای دستگاه مستقیم پخش می‌گردند.
           </p>
 
           {(audioMap.sbCount > 0 || audioMap.wbCount > 0 || audioMap.videoCount > 0) && (
@@ -314,7 +506,7 @@ export function AudioLibraryModal({
                 className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-red-300 dark:border-red-800 text-red-700 dark:text-red-400 text-xs font-bold"
               >
                 <Trash2 className="w-4 h-4" />
-                <span>قطع اتصال فایل‌های صوتی و ویدیویی</span>
+                <span>پاک کردن فایل‌های صوتی و ویدیویی محلی</span>
               </button>
             </div>
           )}

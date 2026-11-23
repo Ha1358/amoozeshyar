@@ -64,7 +64,7 @@ export function PracticeSection({
   ).length;
 
   const checkAnswer = (origIdx: number) => {
-    if (session.solved[origIdx]) return;
+    if (session.solved[origIdx] || session.revealed[origIdx]) return;
     const item = questions[origIdx];
     if (!item) return;
     const currentInput = inputs[origIdx] || {};
@@ -142,7 +142,7 @@ export function PracticeSection({
           ...prev,
           [origIdx]: {
             ok: false,
-            msg: `${customErr || 'پاسخ نادرست است.'} ۳ بار پاسخ غلط ثبت شد؛ پاسخ تشریحی پایین نمایش داده شد و این سؤال در دور بعد دوباره مرور می‌شود.`,
+            msg: `${customErr || 'پاسخ نادرست است.'} پس از ۳ بار پاسخ غلط، این سؤال قفل شد و پاسخ درست همراه با راه‌حل نمایش داده شد.`,
           },
         }));
       } else {
@@ -281,6 +281,7 @@ export function PracticeSection({
               const att = session.attempts[origIdx] || 0;
               const isSolved = !!session.solved[origIdx];
               const isRevealed = !!session.revealed[origIdx];
+              const isLocked = isSolved || isRevealed;
               const fb = feedbacks[origIdx];
               const inp = inputs[origIdx] || {};
 
@@ -300,6 +301,10 @@ export function PracticeSection({
                         <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
                           <CheckCircle2 className="w-4 h-4" /> حل شد
                         </span>
+                      ) : isRevealed ? (
+                        <span className="text-amber-700 dark:text-amber-400 font-bold">
+                          قفل شده (۳ اشتباه)
+                        </span>
                       ) : (
                         `تلاش: ${toPersianDigits(att)} از ۳`
                       )}
@@ -318,7 +323,7 @@ export function PracticeSection({
                             inputMode="text"
                             placeholder="صورت"
                             dir="ltr"
-                            disabled={isSolved}
+                            disabled={isLocked}
                             value={inp.num ?? ''}
                             onChange={(e) =>
                               setInputs((prev) => ({
@@ -335,7 +340,7 @@ export function PracticeSection({
                             inputMode="text"
                             placeholder="مخرج"
                             dir="ltr"
-                            disabled={isSolved}
+                            disabled={isLocked}
                             value={inp.den ?? ''}
                             onChange={(e) =>
                               setInputs((prev) => ({
@@ -354,7 +359,7 @@ export function PracticeSection({
                         inputMode="text"
                         placeholder="پاسخ عددی..."
                         dir="ltr"
-                        disabled={isSolved}
+                        disabled={isLocked}
                         value={inp.single ?? ''}
                         onChange={(e) =>
                           setInputs((prev) => ({
@@ -369,7 +374,7 @@ export function PracticeSection({
 
                     <button
                       type="button"
-                      disabled={isSolved}
+                      disabled={isLocked}
                       onClick={() => checkAnswer(origIdx)}
                       className="min-h-[44px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold transition-colors whitespace-nowrap"
                     >
@@ -451,7 +456,7 @@ export function PracticeSection({
                         )}
                       </div>
                       <div className="text-xs text-amber-700 dark:text-amber-400 font-semibold">
-                        این سؤال در دور مرور پایانی دوباره پرسیده خواهد شد تا خودتان به پاسخ درست برسید.
+                        این سؤال پس از ۳ پاسخ اشتباه در این سری قفل شده است؛ برای تمرین دوباره می‌توانید از دکمه «سؤالات جدید» استفاده کنید.
                       </div>
                     </div>
                   )}

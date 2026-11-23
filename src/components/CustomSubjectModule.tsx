@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type MutableRefObject } from 'react';
 import {
   Upload,
   Download,
@@ -22,7 +22,6 @@ import {
   AlertTriangle,
   ListChecks,
   ArrowLeft,
-  RotateCcw,
   Sparkles,
   FlaskConical,
   Eye,
@@ -30,6 +29,10 @@ import {
   Sigma,
   Type,
   Printer,
+  Calculator,
+  FileText,
+  ClipboardList,
+  History,
 } from 'lucide-react';
 import {
   Chapter1Labs,
@@ -45,17 +48,31 @@ import {
   Chapter9Labs,
 } from './labs/AdvancedChapterLabs';
 import type {
+  CustomChapterItem,
   CustomExerciseItem,
   CustomExerciseVariant,
+  CustomQuizItem,
   CustomSubjectPackage,
   CustomSubjectProgress,
+  SavedQuizAnswerItem,
+  SavedQuizSheet,
+  UserProfile,
 } from '../types/courses';
 import {
+  BUILTIN_COURSE_CATALOG,
   COURSE_TEMPLATE_PACKAGE,
+  DEFAULT_GITHUB_CATALOG_URL,
+  courseMatchesProfile,
+  fetchCatalogFromUrl,
   fetchCoursesFromUrl,
   hasAudioSupport,
+  isCatalogEntryExtracurricular,
+  isExtracurricularCourse,
+  loadAvailableCourseCatalog,
+  matchCatalogEntriesForProfile,
   parseCoursesFromLocalFiles,
   validateCoursePackage,
+  type CatalogCourseEntry,
 } from '../utils/courseLoader';
 import {
   type AudioCandidateItem,
@@ -68,8 +85,111 @@ import {
   PrintableWorksheetModal,
   type PrintableQuestionItem,
 } from './PrintableWorksheetModal';
+import { formatProfileSummary, isProfileComplete } from './ProfileModal';
 
 export const validateCustomSubjectPackage = validateCoursePackage;
+
+function seededShuffle<T>(arr: T[], seedInput: number): T[] {
+  const copy = [...arr];
+  let seed = (seedInput * 9301 + 49297) % 233280;
+  for (let i = copy.length - 1; i > 0; i--) {
+    seed = (seed * 9301 + 49297) % 233280;
+    const j = Math.floor((seed / 233280) * (i + 1));
+    const tmp = copy[i];
+    copy[i] = copy[j];
+    copy[j] = tmp;
+  }
+  return copy;
+}
+
+function shuffleQuizItemOptions(item: CustomQuizItem, seed: number): CustomQuizItem {
+  const hasPositionalOption = item.opts.some(
+    (o) =>
+      o.includes('همه موارد') ||
+      o.includes('هیچ‌کدام') ||
+      o.includes('هیچ کدام') ||
+      o.includes('الف و ب') ||
+      o.includes('All of the above') ||
+      o.includes('None of the above')
+  );
+  if (hasPositionalOption || item.opts.length < 2) {
+    return item;
+  }
+  const indexed = item.opts.map((text, idx) => ({ text, isCorrect: idx === item.ans }));
+  const shuffled = seededShuffle(indexed, seed);
+  const nextAns = shuffled.findIndex((x) => x.isCorrect);
+  return {
+    ...item,
+    opts: shuffled.map((x) => x.text),
+    ans: nextAns >= 0 ? nextAns : item.ans,
+  };
+}
+
+function buildQuizQuestionsForRound(
+  ch: CustomChapterItem,
+  round: number
+): CustomQuizItem[] {
+  if (round <= 0 || ch.quiz.length === 0) {
+    return ch.quiz;
+  }
+
+  const targetCount = ch.quiz.length;
+  const fromLessons: CustomQuizItem[] = [];
+  const seenPrompts = new Set<string>();
+
+  for (const l of ch.lessons) {
+    for (const ex of l.exercises) {
+      const variants: (CustomExerciseItem | CustomExerciseVariant)[] = [
+        ex,
+        ...(ex.variants || []),
+      ];
+      for (const v of variants) {
+        if (
+          v.options &&
+          v.options.length >= 2 &&
+          v.ansIndex !== undefined &&
+          v.ansIndex >= 0 &&
+          v.ansIndex < v.options.length
+        ) {
+          const cleanP = v.prompt.trim();
+          if (!seenPrompts.has(cleanP)) {
+            seenPrompts.add(cleanP);
+            fromLessons.push({
+              q: v.prompt,
+              opts: v.options,
+              ans: v.ansIndex,
+              explain: v.explain,
+              solutionSteps: v.solutionSteps,
+              lessonRef: l.title,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const rotatedLessons = seededShuffle(fromLessons, ch.id * 37 + round * 101);
+  const rotatedBase = seededShuffle(ch.quiz, ch.id * 53 + round * 149);
+
+  const picked: CustomQuizItem[] = [];
+  const usedQ = new Set<string>();
+
+  // Prioritize fresh MCQ items from lessons first on odd/new rounds, mixed with chapter quiz items
+  const combinedSource =
+    round % 2 === 1
+      ? [...rotatedLessons, ...rotatedBase]
+      : [...rotatedBase, ...rotatedLessons];
+
+  for (const item of combinedSource) {
+    if (picked.length >= targetCount) break;
+    const key = item.q.trim();
+    if (usedQ.has(key)) continue;
+    usedQ.add(key);
+    picked.push(shuffleQuizItemOptions(item, ch.id * 71 + round * 19 + picked.length * 13));
+  }
+
+  return picked.length > 0 ? picked : ch.quiz;
+}
 
 function getExerciseVariantForRound(
   ex: CustomExerciseItem,
@@ -129,14 +249,24 @@ function StepByStepSolutionBox({
   );
 }
 
+const CATALOG_URL_STORAGE_KEY = 'amoozeshyar_catalog_url_v1';
+
 export function AddSubjectModal({
   open,
   initialMode = 'local',
+  userProfile,
+  courses = [],
+  onSelectCourse,
+  onDeleteCourse,
   onClose,
   onLoadedCourses,
 }: {
   open: boolean;
   initialMode?: 'local' | 'url';
+  userProfile?: UserProfile;
+  courses?: CustomSubjectPackage[];
+  onSelectCourse?: (courseId: string) => void;
+  onDeleteCourse?: (courseId: string) => void;
   onClose: () => void;
   onLoadedCourses: (
     courses: CustomSubjectPackage[],
@@ -146,19 +276,45 @@ export function AddSubjectModal({
 }) {
   const [mode, setMode] = useState<'local' | 'url'>(initialMode);
   const [markAsExtracurricular, setMarkAsExtracurricular] = useState(false);
+  const [showOtherGrades, setShowOtherGrades] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [urlInput, setUrlInput] = useState('');
+  const [catalogUrl, setCatalogUrl] = useState(() => {
+    try {
+      return localStorage.getItem(CATALOG_URL_STORAGE_KEY) || DEFAULT_GITHUB_CATALOG_URL;
+    } catch {
+      return DEFAULT_GITHUB_CATALOG_URL;
+    }
+  });
+  const [catalogEntries, setCatalogEntries] = useState<CatalogCourseEntry[]>(BUILTIN_COURSE_CATALOG);
   const [busy, setBusy] = useState(false);
+
+  const profileCompleted = Boolean(userProfile && isProfileComplete(userProfile));
 
   useEffect(() => {
     if (open) {
       setMode(initialMode);
       setMarkAsExtracurricular(false);
+      setShowOtherGrades(false);
       setMsg(null);
+      void loadAvailableCourseCatalog(catalogUrl).then((entries) => {
+        if (entries.length > 0) setCatalogEntries(entries);
+      });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialMode]);
 
   if (!open) return null;
+
+  const displayedCatalog =
+    profileCompleted && userProfile && !showOtherGrades
+      ? matchCatalogEntriesForProfile(catalogEntries, userProfile)
+      : catalogEntries;
+
+  const displayedInstalled =
+    profileCompleted && userProfile && !showOtherGrades
+      ? courses.filter((c) => courseMatchesProfile(c, userProfile))
+      : courses;
 
   const handleDownloadTemplate = () => {
     const blob = new Blob([JSON.stringify(COURSE_TEMPLATE_PACKAGE, null, 2)], {
@@ -178,114 +334,57 @@ export function AddSubjectModal({
     });
   };
 
-  const GITHUB_COURSES_BASE = 'https://ha1358.github.io/amoozeshyar/courses';
-
-  const fetchBundledOrRemoteCourseText = async (fileName: string): Promise<string> => {
+  const fetchCatalogEntryText = async (entry: CatalogCourseEntry): Promise<string> => {
     const isFileProto = typeof window !== 'undefined' && window.location.protocol === 'file:';
-    if (!isFileProto) {
+    if (!isFileProto && entry.localPath) {
       try {
         const baseUrl = import.meta.env.BASE_URL || '/';
-        const localUrl = `${baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`}courses/${fileName}`;
+        const localUrl = `${baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`}${entry.localPath.replace(/^\/+/, '')}`;
         const localRes = await fetch(localUrl, { cache: 'no-store' });
         if (localRes.ok) {
           return await localRes.text();
         }
       } catch {
-        // Fallback to GitHub Pages
+        // Fallback to remote URL
       }
     }
-    const remoteRes = await fetch(`${GITHUB_COURSES_BASE}/${fileName}?t=${Date.now()}`, {
+    const remoteRes = await fetch(`${entry.url}?t=${Date.now()}`, {
       cache: 'no-store',
     });
     if (!remoteRes.ok) throw new Error(`HTTP ${remoteRes.status}`);
     return await remoteRes.text();
   };
 
-  const handleDownloadMath8 = async () => {
+  const handleDownloadCatalogJson = async (entry: CatalogCourseEntry) => {
     setBusy(true);
     setMsg(null);
     try {
-      const text = await fetchBundledOrRemoteCourseText('math8.json');
+      const text = await fetchCatalogEntryText(entry);
       const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'riazi-hashtom-jame.json';
+      const fileSlug = entry.localPath?.split('/').pop() || `${entry.id || 'course'}.json`;
+      a.download = fileSlug;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
       setMsg({
         ok: true,
-        text: 'فایل بسته جامع ریاضی هشتم دانلود شد؛ اکنون می‌توانید آن را از بخش «انتخاب فایل» بارگذاری کنید.',
+        text: `فایل «${entry.title}» دانلود شد؛ می‌توانید از مسیر محلی نیز آن را وارد کنید.`,
       });
     } catch {
       setMsg({
         ok: false,
-        text: 'در حالت فایل آفلاین، اگر اینترنت قطع است فایل json ریاضی هشتم را از دستگاه خود با دکمه «انتخاب فایل» بارگذاری کنید.',
+        text: 'دریافت فایل درسی ناموفق بود. اتصال اینترنت را بررسی کرده یا فایل محلی را انتخاب کنید.',
       });
     } finally {
       setBusy(false);
     }
   };
 
-  const handleDownloadMath10 = async () => {
-    setBusy(true);
-    setMsg(null);
-    try {
-      const text = await fetchBundledOrRemoteCourseText('math10.json');
-      const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'riazi-1-dahom-nazari.json';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      setMsg({
-        ok: true,
-        text: 'فایل بسته جامع ریاضی ۱ (پایه دهم — نظری) دانلود شد؛ اکنون می‌توانید آن را از بخش «انتخاب فایل» بارگذاری کنید.',
-      });
-    } catch {
-      setMsg({
-        ok: false,
-        text: 'در حالت فایل آفلاین، اگر اینترنت قطع است فایل json ریاضی ۱ دهم را از دستگاه خود با دکمه «انتخاب فایل» بارگذاری کنید.',
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleDownloadAef1 = async () => {
-    setBusy(true);
-    setMsg(null);
-    try {
-      const text = await fetchBundledOrRemoteCourseText('aef1-v3.json');
-      const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'aef1-3rd-edition-complete.json';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      setMsg({
-        ok: true,
-        text: 'فایل جامع زبان American English File 1 (ویرایش سوم + متن فایل‌های صوتی و تصویری) دانلود شد؛ اکنون از بخش «انتخاب فایل» آن را بارگذاری کنید.',
-      });
-    } catch {
-      setMsg({
-        ok: false,
-        text: 'در حالت فایل آفلاین، اگر اینترنت قطع است فایل json درس زبان را از دستگاه خود با دکمه «انتخاب فایل» بارگذاری کنید.',
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleLocalSelection = async (files: FileList | null) => {
+  const handleLocalSelection = async (files: FileList | null, targetCourseId?: string) => {
     if (!files || files.length === 0) return;
     setBusy(true);
     setMsg(null);
@@ -301,8 +400,16 @@ export function AddSubjectModal({
       const taggedCourses = markAsExtracurricular
         ? res.courses.map((c) => ({ ...c, isExtracurricular: true }))
         : res.courses;
-      onLoadedCourses(taggedCourses, res.audioCandidates);
-      onClose();
+      onLoadedCourses(taggedCourses, res.audioCandidates, targetCourseId ? { targetCourseId } : undefined);
+      setMsg({
+        ok: true,
+        text: targetCourseId
+          ? 'درس از مسیر محلی با حفظ تمام داده‌ها بروزرسانی شد.'
+          : `${toPersianDigits(taggedCourses.length)} درس با موفقیت بارگذاری و ذخیره شد.`,
+      });
+      if (!targetCourseId) {
+        onClose();
+      }
     } catch {
       setMsg({ ok: false, text: 'خطا در خواندن فایل یا پوشه محلی.' });
     } finally {
@@ -310,7 +417,7 @@ export function AddSubjectModal({
     }
   };
 
-  const handleFetchFromUrl = async (overrideUrl?: string) => {
+  const handleFetchFromUrl = async (overrideUrl?: string, targetCourseId?: string) => {
     const clean = (typeof overrideUrl === 'string' ? overrideUrl : urlInput).trim();
     if (!clean) {
       setMsg({ ok: false, text: 'لطفاً آدرس اینترنتی فایل درس (.json یا .zip) را وارد کنید.' });
@@ -330,14 +437,42 @@ export function AddSubjectModal({
       const taggedCourses = markAsExtracurricular
         ? res.courses.map((c) => ({ ...c, isExtracurricular: true }))
         : res.courses;
-      onLoadedCourses(taggedCourses, res.audioCandidates);
+      onLoadedCourses(taggedCourses, res.audioCandidates, targetCourseId ? { targetCourseId } : undefined);
       if (typeof overrideUrl !== 'string') setUrlInput('');
-      onClose();
+      setMsg({
+        ok: true,
+        text: targetCourseId
+          ? 'درس از اینترنت بروزرسانی شد و سوابق حفظ گردید.'
+          : `${toPersianDigits(taggedCourses.length)} درس با موفقیت نصب شد.`,
+      });
+      if (typeof overrideUrl !== 'string' && !targetCourseId) {
+        onClose();
+      }
     } catch {
       setMsg({
         ok: false,
         text: 'خطا در دریافت فایل از اینترنت. آدرس، اتصال شبکه یا دسترسی CORS سرور را بررسی کنید.',
       });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRefreshCatalog = async () => {
+    const clean = catalogUrl.trim();
+    if (!clean) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      localStorage.setItem(CATALOG_URL_STORAGE_KEY, clean);
+      const valid = await fetchCatalogFromUrl(clean);
+      setCatalogEntries(valid);
+      setMsg({
+        ok: true,
+        text: `فهرست اینترنتی بروزرسانی شد (${toPersianDigits(valid.length)} بسته درسی).`,
+      });
+    } catch {
+      setMsg({ ok: false, text: 'دریافت فهرست دروس از اینترنت ناموفق بود.' });
     } finally {
       setBusy(false);
     }
@@ -353,25 +488,50 @@ export function AddSubjectModal({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="بارگذاری درس جدید از مسیر محلی یا اینترنت"
-        className="w-full max-w-lg max-h-[92vh] flex flex-col bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-t-2xl sm:rounded-2xl shadow-2xl"
+        aria-label="صفحه بارگذاری و مدیریت دروس"
+        className="w-full max-w-2xl max-h-[92vh] flex flex-col bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-t-2xl sm:rounded-2xl shadow-2xl"
       >
         <div className="px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
-          <h3 className="font-bold text-sm sm:text-lg flex items-center gap-2">
-            <FileJson className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-            <span>بارگذاری درس جدید</span>
-          </h3>
+          <div className="min-w-0">
+            <h3 className="font-bold text-sm sm:text-lg flex items-center gap-2">
+              <FileJson className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0" />
+              <span className="truncate">صفحه بارگذاری و مدیریت دروس</span>
+            </h3>
+            {profileCompleted && userProfile && (
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                فیلتر فعال بر اساس پروفایل: {formatProfileSummary(userProfile)}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="بستن"
-            className="min-w-[40px] min-h-[40px] rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 flex items-center justify-center"
+            className="min-w-[40px] min-h-[40px] rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 flex items-center justify-center shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4 text-xs sm:text-sm leading-relaxed">
+          {/* Profile Filter Toggle */}
+          {profileCompleted && (
+            <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-xs">
+              <span className="font-bold text-blue-900 dark:text-blue-200">
+                دروس رسمی متناسب با پایه شما + دروس فوق‌برنامه نمایش داده می‌شوند.
+              </span>
+              <label className="inline-flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showOtherGrades}
+                  onChange={(e) => setShowOtherGrades(e.target.checked)}
+                  className="w-4 h-4 rounded accent-blue-600"
+                />
+                <span>نمایش دروس سایر مقاطع</span>
+              </label>
+            </div>
+          )}
+
           {/* Source Mode Switcher */}
           <div className="grid grid-cols-2 gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
             <button
@@ -401,10 +561,10 @@ export function AddSubjectModal({
           </div>
 
           {mode === 'local' ? (
-            <div className="space-y-3">
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3">
               <p className="text-slate-600 dark:text-slate-300">
-                فایل <code dir="ltr">.json</code> یا بسته <code dir="ltr">.zip</code> (شامل درس و فایل‌های صوتی) یا یک پوشه با نام انگلیسی مثل{' '}
-                <code dir="ltr">courses/math8/</code> را از دستگاه خود انتخاب کنید:
+                فایل <code dir="ltr">.json</code> یا بسته <code dir="ltr">.zip</code> (شامل درس و فایل‌های صوتی) یا یک پوشه محلی با نام انگلیسی مثل{' '}
+                <code dir="ltr">courses/</code> را از دستگاه خود انتخاب کنید:
               </p>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -444,63 +604,52 @@ export function AddSubjectModal({
               </div>
             </div>
           ) : (
-            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2.5">
-              <div className="font-bold flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300">
-                <Link2 className="w-4 h-4" />
-                <span>دریافت مستقیم از لینک اینترنتی (.json یا .zip):</span>
-              </div>
-              <p className="text-xs text-slate-600 dark:text-slate-400">
-                آدرس مستقیم بسته درسی را وارد کنید تا دریافت، ذخیره و به فهرست دروس شما اضافه شود:
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <input
-                  type="url"
-                  dir="ltr"
-                  value={urlInput}
-                  onChange={(e) => setUrlInput(e.target.value)}
-                  placeholder="https://ha1358.github.io/amoozeshyar/courses/math8.json"
-                  className="flex-1 min-w-[200px] min-h-[42px] px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs sm:text-sm text-left"
-                />
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => handleFetchFromUrl()}
-                  className="min-h-[42px] px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs sm:text-sm font-bold shrink-0"
-                >
-                  {busy ? 'در حال دریافت...' : 'دریافت و افزودن'}
-                </button>
-              </div>
-              <div className="pt-1 space-y-1.5">
-                <div className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                  نصب مستقیم دروس رسمی با یک کلیک (از اینترنت):
+            <div className="space-y-3">
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2.5">
+                <div className="font-bold flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300">
+                  <Link2 className="w-4 h-4" />
+                  <span>دریافت مستقیم از لینک اینترنتی (.json یا .zip):</span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    type="url"
+                    dir="ltr"
+                    value={urlInput}
+                    onChange={(e) => setUrlInput(e.target.value)}
+                    placeholder="https://ha1358.github.io/amoozeshyar/courses/math8.json"
+                    className="flex-1 min-w-[200px] min-h-[42px] px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs sm:text-sm text-left"
+                  />
                   <button
                     type="button"
                     disabled={busy}
-                    onClick={() => handleFetchFromUrl(`${GITHUB_COURSES_BASE}/math8.json`)}
-                    className="min-h-[38px] px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5"
+                    onClick={() => handleFetchFromUrl()}
+                    className="min-h-[42px] px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs sm:text-sm font-bold shrink-0"
                   >
-                    <Globe className="w-3.5 h-3.5 shrink-0" />
-                    <span>ریاضی هشتم</span>
+                    {busy ? 'در حال دریافت...' : 'دریافت و افزودن'}
                   </button>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2">
+                <div className="font-bold text-xs flex items-center gap-1.5 text-teal-700 dark:text-teal-300">
+                  <BookOpen className="w-4 h-4" />
+                  <span>آدرس فهرست آنلاین دروس (Catalog):</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    type="url"
+                    dir="ltr"
+                    value={catalogUrl}
+                    onChange={(e) => setCatalogUrl(e.target.value)}
+                    className="flex-1 min-w-[200px] min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-xs text-left"
+                  />
                   <button
                     type="button"
                     disabled={busy}
-                    onClick={() => handleFetchFromUrl(`${GITHUB_COURSES_BASE}/math10.json`)}
-                    className="min-h-[38px] px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5"
+                    onClick={handleRefreshCatalog}
+                    className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-bold shrink-0"
                   >
-                    <Globe className="w-3.5 h-3.5 shrink-0" />
-                    <span>ریاضی ۱ دهم</span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => handleFetchFromUrl(`${GITHUB_COURSES_BASE}/aef1-v3.json`)}
-                    className="min-h-[38px] px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5"
-                  >
-                    <Globe className="w-3.5 h-3.5 shrink-0" />
-                    <span>زبان AEF 1 (فوق‌برنامه)</span>
+                    بروزرسانی فهرست
                   </button>
                 </div>
               </div>
@@ -515,49 +664,151 @@ export function AddSubjectModal({
               onChange={(e) => setMarkAsExtracurricular(e.target.checked)}
               className="w-4 h-4 rounded accent-amber-600 shrink-0"
             />
-            <span>ثبت این درس به‌عنوان درس فوق‌برنامه (قابل استفاده در تمام مقاطع و پایه‌ها)</span>
+            <span>ثبت درس جدید به‌عنوان درس فوق‌برنامه (قابل استفاده در تمام مقاطع و پایه‌ها)</span>
           </label>
 
+          {/* Profile-Filtered Recommended / Official Catalog Courses */}
           <div className="space-y-2 pt-1">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleDownloadMath8}
-              className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-teal-300 dark:border-teal-700 bg-teal-50 dark:bg-teal-950/40 text-teal-800 dark:text-teal-200 font-bold text-xs sm:text-sm hover:bg-teal-100 dark:hover:bg-teal-900/50"
-            >
-              <Download className="w-4 h-4 shrink-0" />
-              <span>دانلود فایل آماده درس ریاضی هشتم (آموزش از صفر + تمرین و آزمون)</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleDownloadMath10}
-              className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-950/40 text-blue-800 dark:text-blue-200 font-bold text-xs sm:text-sm hover:bg-blue-100 dark:hover:bg-blue-900/50"
-            >
-              <Download className="w-4 h-4 shrink-0" />
-              <span>دانلود فایل آماده درس ریاضی ۱ پایه دهم (شاخه نظری · ریاضی و تجربی)</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleDownloadAef1}
-              className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-800 dark:text-indigo-200 font-bold text-xs sm:text-sm hover:bg-indigo-100 dark:hover:bg-indigo-900/50"
-            >
-              <Download className="w-4 h-4 shrink-0" />
-              <span>دانلود فایل آماده درس زبان AEF 1 (فوق‌برنامه · ویرایش سوم + صوت و تصویر)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleDownloadTemplate}
-              className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 font-semibold text-xs sm:text-sm"
-            >
-              <Download className="w-4 h-4 shrink-0" />
-              <span>دریافت فایل الگوی خام JSON برای ساخت بسته درسی</span>
-            </button>
+            <div className="font-bold text-xs sm:text-sm text-slate-800 dark:text-slate-100">
+              {profileCompleted && !showOtherGrades
+                ? 'دروس رسمی و فوق‌برنامه متناسب با پروفایل شما:'
+                : 'فهرست دروس آماده استاندارد:'}
+            </div>
+            {displayedCatalog.length > 0 ? (
+              <div className="space-y-2">
+                {displayedCatalog.map((entry, idx) => {
+                  const isExtra = isCatalogEntryExtracurricular(entry);
+                  return (
+                    <div
+                      key={entry.id || idx}
+                      className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/50 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                    >
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="font-bold text-xs sm:text-sm flex flex-wrap items-center gap-1.5">
+                          <span>{entry.title}</span>
+                          {isExtra && (
+                            <span className="text-[11px] font-bold text-amber-700 dark:text-amber-300">
+                              · فوق‌برنامه (همه مقاطع)
+                            </span>
+                          )}
+                        </div>
+                        {entry.subtitle && (
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {entry.subtitle}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => handleFetchFromUrl(entry.url)}
+                          className="min-h-[38px] px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-1"
+                        >
+                          <Globe className="w-3.5 h-3.5" />
+                          <span>نصب مستقیم</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => handleDownloadCatalogJson(entry)}
+                          title="دانلود فایل آفلاین"
+                          className="min-h-[38px] px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 text-xs font-bold inline-flex items-center gap-1"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>فایل</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="p-3.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-xs text-slate-500">
+                در حال حاضر درس آماده‌ای در فهرست آنلاین برای پایه انتخاب‌شده وجود ندارد؛ می‌توانید فایل درس دلخواه را از مسیر محلی یا لینک مستقیم بارگذاری کنید یا گزینه «نمایش دروس سایر مقاطع» را بزنید.
+              </div>
+            )}
           </div>
+
+          {/* Installed Courses Management */}
+          {displayedInstalled.length > 0 && (
+            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2.5">
+              <div className="font-bold text-xs sm:text-sm">
+                دروس نصب‌شده (با حفظ سوابق مطالعه و آزمون):
+              </div>
+              {displayedInstalled.map((cs) => (
+                <div
+                  key={cs.id}
+                  className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-xs sm:text-sm truncate">{cs.title}</div>
+                    <div className="text-[11px] text-slate-500 truncate">
+                      {isExtracurricularCourse(cs) ? 'فوق‌برنامه (همه مقاطع)' : cs.grades?.join('، ') || 'درس رسمی'}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                    {onSelectCourse && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectCourse(cs.id);
+                          onClose();
+                        }}
+                        className="min-h-[34px] px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+                      >
+                        ورود به درس
+                      </button>
+                    )}
+                    {cs.sourceUrl && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => handleFetchFromUrl(cs.sourceUrl!, cs.id)}
+                        className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>بروزرسانی</span>
+                      </button>
+                    )}
+                    <label className="min-h-[34px] inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer">
+                      <FolderOpen className="w-3 h-3" />
+                      <span>از فایل</span>
+                      <input
+                        type="file"
+                        disabled={busy}
+                        accept=".json,.zip,application/json,application/zip"
+                        onChange={(e) => {
+                          void handleLocalSelection(e.target.files, cs.id);
+                          e.target.value = '';
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                    {onDeleteCourse && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteCourse(cs.id)}
+                        aria-label={`حذف ${cs.title}`}
+                        className="min-w-[34px] min-h-[34px] rounded-lg border border-red-200 dark:border-red-800 text-red-600 flex items-center justify-center"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handleDownloadTemplate}
+            className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 font-semibold text-xs sm:text-sm"
+          >
+            <Download className="w-4 h-4 shrink-0" />
+            <span>دریافت فایل الگوی خام JSON برای ساخت بسته درسی جدید</span>
+          </button>
 
           {msg && (
             <div
@@ -581,6 +832,10 @@ export function CustomSubjectModule({
   studentName,
   studentGradeLabel,
   onOpenAudioSetup,
+  onOpenCalculator,
+  onOpenFormulas,
+  onOpenCoursesPage,
+  stepBackRef,
   onUpdateProgress,
   onApplyCourseUpdate,
   onDeleteSubject,
@@ -591,6 +846,10 @@ export function CustomSubjectModule({
   studentName?: string;
   studentGradeLabel?: string;
   onOpenAudioSetup: () => void;
+  onOpenCalculator?: () => void;
+  onOpenFormulas?: () => void;
+  onOpenCoursesPage?: () => void;
+  stepBackRef?: MutableRefObject<() => boolean>;
   onUpdateProgress: (updater: (prev: CustomSubjectProgress) => CustomSubjectProgress) => void;
   onApplyCourseUpdate: (
     updated: CustomSubjectPackage,
@@ -615,12 +874,14 @@ export function CustomSubjectModule({
   const [shownHints, setShownHints] = useState<Record<string, boolean>>({});
   const [openSolutions, setOpenSolutions] = useState<Record<string, boolean>>({});
 
+  // Quiz state: changing rounds + submitted answers + saved answer sheets review + filter
+  const [quizRoundByChapter, setQuizRoundByChapter] = useState<Record<number, number>>({});
   const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({});
   const [quizSubmitted, setQuizSubmitted] = useState(false);
+  const [reviewSheetId, setReviewSheetId] = useState<string | null>(null);
+  const [sheetFilter, setSheetFilter] = useState<'all' | 'wrong' | 'correct' | 'unanswered'>('all');
 
-  // Course Update panel state
-  const [showUpdatePanel, setShowUpdatePanel] = useState(false);
-  const [updateUrl, setUpdateUrl] = useState(pkg.sourceUrl || '');
+  // Streamlined 1-click update note (NO local/URL path picker inside lesson view)
   const [updating, setUpdating] = useState(false);
   const [updateNote, setUpdateNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -659,14 +920,34 @@ export function CustomSubjectModule({
     setFeedback({});
     setShownHints({});
     setOpenSolutions({});
+    setQuizRoundByChapter({});
     setQuizAnswers({});
     setQuizSubmitted(false);
-    setShowUpdatePanel(false);
+    setReviewSheetId(null);
+    setSheetFilter('all');
     setUpdateNote(null);
     setConfirmDelete(false);
     setPrintMode(null);
-    setUpdateUrl(pkg.sourceUrl || '');
   }, [pkg.id]);
+
+  // Step-by-step Back Navigation Support inside active course
+  if (stepBackRef) {
+    stepBackRef.current = () => {
+      if (printMode !== null) {
+        setPrintMode(null);
+        return true;
+      }
+      if (reviewSheetId !== null) {
+        setReviewSheetId(null);
+        return true;
+      }
+      if (tab !== 'lesson') {
+        setTab('lesson');
+        return true;
+      }
+      return false;
+    };
+  }
 
   const ch = pkg.chapters[chapterIdx] ?? pkg.chapters[0];
   const lesson = ch.lessons[lessonIdx] ?? ch.lessons[0];
@@ -753,55 +1034,38 @@ export function CustomSubjectModule({
   const hasMultipleVariants = maxVariantsCount > 1;
 
   const solvedMap = progress.exerciseSolved[lesson.id] || {};
+  const roundKey = `${lesson.id}::r${currentRound}`;
+  const persistedLockedMap = progress.exerciseLocked?.[roundKey] || {};
   const isStudied = !!progress.lessonsStudied[lesson.id];
   const chapterBest = progress.quizBest?.[ch.id];
 
-  const handleUpdateFromUrl = async () => {
-    const clean = updateUrl.trim();
-    if (!clean) {
-      setUpdateNote({ ok: false, text: 'لطفاً لینک اینترنتی نسخه جدید درس را وارد کنید.' });
+  const activeQuizRound = quizRoundByChapter[ch.id] ?? 0;
+  const activeQuizQuestions = buildQuizQuestionsForRound(ch, activeQuizRound);
+  const chapterSheets = (progress.quizSheets || []).filter((s) => s.chapterId === ch.id);
+  const activeReviewSheet: SavedQuizSheet | null = reviewSheetId
+    ? chapterSheets.find((s) => s.id === reviewSheetId) ?? null
+    : null;
+
+  const handleOneClickSyncFromSource = async () => {
+    if (!pkg.sourceUrl) {
+      onOpenCoursesPage?.();
       return;
     }
     setUpdating(true);
     setUpdateNote(null);
     try {
-      const res = await fetchCoursesFromUrl(clean);
+      const res = await fetchCoursesFromUrl(pkg.sourceUrl);
       if (res.courses.length === 0) {
-        setUpdateNote({ ok: false, text: 'فایل دریافت‌شده ساختار معتبر درسی ندارد.' });
+        setUpdateNote({ ok: false, text: 'ساختار فایل دریافت‌شده معتبر نیست.' });
         return;
       }
-      onApplyCourseUpdate({ ...res.courses[0], sourceUrl: clean }, res.audioCandidates);
+      onApplyCourseUpdate({ ...res.courses[0], sourceUrl: pkg.sourceUrl }, res.audioCandidates);
       setUpdateNote({
         ok: true,
-        text: 'محتوای درس از اینترنت بروزرسانی شد و تمام سوابق پیشرفت قبلی شما حفظ گردید.',
+        text: 'محتوای درس با حفظ تمام سوابق پیشرفت قبلی شما همگام‌سازی و بروزرسانی شد.',
       });
     } catch {
-      setUpdateNote({ ok: false, text: 'خطا در بروزرسانی از آدرس اینترنتی.' });
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  const handleUpdateFromLocal = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    setUpdating(true);
-    setUpdateNote(null);
-    try {
-      const res = await parseCoursesFromLocalFiles(files);
-      if (res.courses.length === 0) {
-        setUpdateNote({
-          ok: false,
-          text: 'فایل یا پوشه انتخاب‌شده شامل بسته درسی معتبر نبود.',
-        });
-        return;
-      }
-      onApplyCourseUpdate(res.courses[0], res.audioCandidates);
-      setUpdateNote({
-        ok: true,
-        text: 'محتوای درس از مسیر محلی بروزرسانی شد و تمام پیشرفت‌ها و نمرات قبلی حفظ گردید.',
-      });
-    } catch {
-      setUpdateNote({ ok: false, text: 'خطا در خواندن فایل بروزرسانی محلی.' });
+      setUpdateNote({ ok: false, text: 'خطا در همگام‌سازی آنلاین درس. اتصال اینترنت را بررسی کنید.' });
     } finally {
       setUpdating(false);
     }
@@ -811,7 +1075,10 @@ export function CustomSubjectModule({
     const activeEx = getExerciseVariantForRound(exBase, currentRound);
     const key = `${lesson.id}::r${currentRound}::${exBase.id}`;
     const existingFb = feedback[key];
-    if (existingFb?.ok || existingFb?.autoRevealed) return;
+    const errs = wrongAttempts[key] || 0;
+    const isPersistedLocked = Boolean(persistedLockedMap[exBase.id]);
+    const isSolvedHere = Boolean(existingFb?.ok || (currentRound === 0 && solvedMap[exBase.id]));
+    if (isSolvedHere || existingFb?.autoRevealed || isPersistedLocked || errs >= 3) return;
 
     const raw = override ?? inputs[key] ?? '';
     if (!raw.trim()) return;
@@ -838,7 +1105,7 @@ export function CustomSubjectModule({
         },
       }));
     } else {
-      const nextErr = (wrongAttempts[key] || 0) + 1;
+      const nextErr = errs + 1;
       setWrongAttempts((p) => ({ ...p, [key]: nextErr }));
 
       if (nextErr >= 3) {
@@ -847,10 +1114,20 @@ export function CustomSubjectModule({
           [key]: {
             ok: false,
             autoRevealed: true,
-            msg: 'پس از ۳ بار پاسخ نادرست، پاسخ صحیح و راه‌حل کامل گام‌به‌گام نمایش داده شد.',
+            msg: 'پس از ۳ بار پاسخ نادرست، این سؤال قفل شد و پاسخ صحیح همراه با راه‌حل گام‌به‌گام نمایش داده شد.',
           },
         }));
         setOpenSolutions((p) => ({ ...p, [key]: true }));
+        onUpdateProgress((prev) => ({
+          ...prev,
+          exerciseLocked: {
+            ...(prev.exerciseLocked || {}),
+            [roundKey]: {
+              ...((prev.exerciseLocked || {})[roundKey] || {}),
+              [exBase.id]: true,
+            },
+          },
+        }));
       } else {
         const remaining = 3 - nextErr;
         if (nextErr === 2 && activeEx.hint) {
@@ -862,40 +1139,25 @@ export function CustomSubjectModule({
             ok: false,
             msg: `پاسخ نادرست است (اشتباه ${toPersianDigits(nextErr)} از ۳ — ${toPersianDigits(
               remaining
-            )} فرصت دیگر تا نمایش خودکار راه‌حل کامل).`,
+            )} فرصت دیگر تا قفل شدن سؤال و نمایش راه‌حل).`,
           },
         }));
       }
     }
   };
 
-  const resetSingleQuestion = (exId: string) => {
-    const key = `${lesson.id}::r${currentRound}::${exId}`;
-    setInputs((p) => {
-      const n = { ...p };
-      delete n[key];
-      return n;
-    });
-    setWrongAttempts((p) => {
-      const n = { ...p };
-      delete n[key];
-      return n;
-    });
-    setFeedback((p) => {
-      const n = { ...p };
-      delete n[key];
-      return n;
-    });
-    setOpenSolutions((p) => {
-      const n = { ...p };
-      delete n[key];
-      return n;
-    });
-  };
-
   const handleRegenerateLessonExercises = () => {
     const nextRound = (currentRound + 1) % maxVariantsCount;
     setVariantRoundByLesson((p) => ({ ...p, [lesson.id]: nextRound }));
+  };
+
+  const handleChangeQuizQuestions = () => {
+    setQuizRoundByChapter((prev) => ({ ...prev, [ch.id]: (prev[ch.id] ?? 0) + 1 }));
+    setQuizAnswers({});
+    setQuizSubmitted(false);
+    setReviewSheetId(null);
+    setSheetFilter('all');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
@@ -916,18 +1178,30 @@ export function CustomSubjectModule({
                 <span>نسخه {toPersianDigits(pkg.version)}</span>
               </>
             )}
-            {(pkg.sourceUrl || pkg.sourcePath) && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span dir="ltr" className="truncate max-w-[240px]">
-                  {pkg.sourceUrl ? 'URL' : pkg.sourcePath}
-                </span>
-              </>
-            )}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {isMathCourse && onOpenCalculator && (
+            <button
+              type="button"
+              onClick={onOpenCalculator}
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs"
+            >
+              <Calculator className="w-4 h-4" />
+              <span>ماشین‌حساب</span>
+            </button>
+          )}
+          {isMathCourse && onOpenFormulas && (
+            <button
+              type="button"
+              onClick={onOpenFormulas}
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-indigo-200 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-200 text-xs font-bold"
+            >
+              <FileText className="w-4 h-4" />
+              <span>فرمول‌ها</span>
+            </button>
+          )}
           {showAudio && (
             <button
               type="button"
@@ -940,14 +1214,28 @@ export function CustomSubjectModule({
               </span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setShowUpdatePanel((v) => !v)}
-            className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
-          >
-            <RefreshCw className="w-4 h-4" />
-            <span>بروزرسانی درس</span>
-          </button>
+          {pkg.sourceUrl ? (
+            <button
+              type="button"
+              disabled={updating}
+              onClick={handleOneClickSyncFromSource}
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-200 text-xs font-bold"
+            >
+              <RefreshCw className={`w-4 h-4 ${updating ? 'animate-spin' : ''}`} />
+              <span>{updating ? 'در حال همگام‌سازی...' : 'بروزرسانی درس'}</span>
+            </button>
+          ) : (
+            onOpenCoursesPage && (
+              <button
+                type="button"
+                onClick={onOpenCoursesPage}
+                className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-200 text-xs font-bold"
+              >
+                <FolderOpen className="w-4 h-4" />
+                <span>مدیریت درس</span>
+              </button>
+            )
+          )}
 
           {!confirmDelete ? (
             <button
@@ -979,100 +1267,15 @@ export function CustomSubjectModule({
         </div>
       </div>
 
-      {/* Inline Course Update Panel (Internet URL OR Local Path with data preservation) */}
-      {showUpdatePanel && (
-        <div className="p-4 rounded-2xl bg-slate-100/80 dark:bg-slate-900 border border-blue-200 dark:border-blue-800 space-y-3 text-xs sm:text-sm">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-bold text-blue-900 dark:text-blue-200">
-              بروزرسانی «{pkg.title}» با حفظ کامل داده‌ها و پیشرفت قبلی
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowUpdatePanel(false)}
-              className="text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            <div className="p-3 rounded-xl bg-white dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2">
-              <div className="font-bold text-xs flex items-center gap-1.5 text-indigo-700 dark:text-indigo-300">
-                <Globe className="w-4 h-4" />
-                <span>بروزرسانی از آدرس اینترنتی:</span>
-              </div>
-              <div className="flex gap-2">
-                <input
-                  type="url"
-                  dir="ltr"
-                  value={updateUrl}
-                  onChange={(e) => setUpdateUrl(e.target.value)}
-                  placeholder="https://example.com/courses/course.json"
-                  className="flex-1 min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-xs text-left"
-                />
-                <button
-                  type="button"
-                  disabled={updating}
-                  onClick={handleUpdateFromUrl}
-                  className="min-h-[40px] px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold shrink-0"
-                >
-                  {updating ? 'در حال دریافت...' : 'بروزرسانی'}
-                </button>
-              </div>
-            </div>
-
-            <div className="p-3 rounded-xl bg-white dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2">
-              <div className="font-bold text-xs flex items-center gap-1.5 text-blue-700 dark:text-blue-300">
-                <FolderOpen className="w-4 h-4" />
-                <span>بروزرسانی از مسیر محلی (فایل یا پوشه جدید):</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <label className="flex-1 min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer">
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>فایل (.json / .zip)</span>
-                  <input
-                    type="file"
-                    disabled={updating}
-                    accept=".json,.zip,application/json,application/zip"
-                    onChange={(e) => {
-                      void handleUpdateFromLocal(e.target.files);
-                      e.target.value = '';
-                    }}
-                    className="hidden"
-                  />
-                </label>
-                <label className="flex-1 min-h-[40px] inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 text-xs font-bold cursor-pointer">
-                  <FolderOpen className="w-3.5 h-3.5" />
-                  <span>پوشه محلی</span>
-                  <input
-                    type="file"
-                    multiple
-                    disabled={updating}
-                    // @ts-expect-error webkitdirectory selects folder
-                    webkitdirectory=""
-                    directory=""
-                    onChange={(e) => {
-                      void handleUpdateFromLocal(e.target.files);
-                      e.target.value = '';
-                    }}
-                    className="hidden"
-                  />
-                </label>
-              </div>
-            </div>
-          </div>
-
-          {updateNote && (
-            <div
-              className={`font-bold text-xs ${
-                updateNote.ok
-                  ? 'text-emerald-700 dark:text-emerald-400'
-                  : 'text-red-600 dark:text-red-400'
-              }`}
-            >
-              {updateNote.text}
-            </div>
-          )}
+      {updateNote && (
+        <div
+          className={`p-3 rounded-xl border text-xs font-bold ${
+            updateNote.ok
+              ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+              : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+          }`}
+        >
+          {updateNote.text}
         </div>
       )}
 
@@ -1087,6 +1290,7 @@ export function CustomSubjectModule({
               setLessonIdx(0);
               setQuizAnswers({});
               setQuizSubmitted(false);
+              setReviewSheetId(null);
             }}
             className={`min-h-[44px] px-4 py-2 rounded-xl border text-xs sm:text-sm font-bold ${
               idx === chapterIdx
@@ -1210,16 +1414,21 @@ export function CustomSubjectModule({
                 </p>
               </div>
 
-              {/* Quick Section Navigation Strip */}
+              {/* Quick Section Navigation Strip (In-page smooth scroll without changing URL hash) */}
               {lesson.sections.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                   {lesson.sections.map((sec, idx) => {
                     const theme = sectionThemes[idx % sectionThemes.length];
                     return (
-                      <a
+                      <button
                         key={idx}
-                        href={`#lesson-sec-${idx}`}
-                        className={`min-h-[36px] inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/90 dark:bg-slate-900/90 border border-slate-200/90 dark:border-slate-700 text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200 transition-colors ${theme.chip}`}
+                        type="button"
+                        onClick={() =>
+                          document
+                            .getElementById(`lesson-sec-${idx}`)
+                            ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                        }
+                        className={`min-h-[36px] inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/90 dark:bg-slate-900/90 border border-slate-200/90 dark:border-slate-700 text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200 transition-colors text-right ${theme.chip}`}
                       >
                         <span
                           className={`w-5 h-5 rounded-md inline-flex items-center justify-center text-[11px] font-extrabold shrink-0 ${theme.badge}`}
@@ -1229,17 +1438,22 @@ export function CustomSubjectModule({
                         <span className="truncate max-w-[210px] sm:max-w-[260px]">
                           {sec.heading.replace(/^[۰-۹0-9]+[\.:\-\s]+/, '')}
                         </span>
-                      </a>
+                      </button>
                     );
                   })}
                   {chapterLabElement && (
-                    <a
-                      href="#lesson-visual-lab"
+                    <button
+                      type="button"
+                      onClick={() =>
+                        document
+                          .getElementById('lesson-visual-lab')
+                          ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                      }
                       className="min-h-[36px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs sm:text-sm font-bold transition-colors"
                     >
                       <FlaskConical className="w-4 h-4 shrink-0" />
                       <span>آزمایشگاه بصری و تعاملی فصل</span>
-                    </a>
+                    </button>
                   )}
                 </div>
               )}
@@ -1574,8 +1788,13 @@ export function CustomSubjectModule({
               const key = `${lesson.id}::r${currentRound}::${exBase.id}`;
               const fb = feedback[key];
               const errs = wrongAttempts[key] || 0;
-              const isLocked = Boolean(fb?.ok || fb?.autoRevealed);
-              const isSolutionOpen = Boolean(openSolutions[key]);
+              const isPersistedLocked = Boolean(persistedLockedMap[exBase.id]);
+              const isAutoLocked = Boolean(fb?.autoRevealed || isPersistedLocked || errs >= 3);
+              const isSolvedRound = Boolean(
+                fb?.ok || (currentRound === 0 && solvedMap[exBase.id])
+              );
+              const isLocked = isSolvedRound || isAutoLocked;
+              const isSolutionOpen = Boolean(openSolutions[key] || isAutoLocked);
               const correctDisplay =
                 ex.type === 'mcq' && ex.options && ex.ansIndex !== undefined
                   ? ex.options[ex.ansIndex]
@@ -1585,9 +1804,9 @@ export function CustomSubjectModule({
                 <div
                   key={key}
                   className={`p-4 rounded-xl border transition-colors ${
-                    fb?.ok || solvedMap[exBase.id]
+                    isSolvedRound
                       ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800'
-                      : fb?.autoRevealed
+                      : isAutoLocked
                       ? 'bg-amber-50/40 dark:bg-amber-950/20 border-amber-300 dark:border-amber-800'
                       : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700'
                   }`}
@@ -1597,17 +1816,15 @@ export function CustomSubjectModule({
                       {toPersianDigits(idx + 1)}) <BidiText text={ex.prompt} />
                     </div>
                     <div className="flex items-center gap-1.5 text-[11px] font-bold shrink-0 tabular-nums">
-                      {errs > 0 && !fb?.ok && (
-                        <span
-                          className={`px-2 py-0.5 rounded-md ${
-                            errs >= 3
-                              ? 'bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200'
-                              : 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300'
-                          }`}
-                        >
+                      {isAutoLocked ? (
+                        <span className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200">
+                          قفل شده (۳ پاسخ اشتباه)
+                        </span>
+                      ) : errs > 0 && !isSolvedRound ? (
+                        <span className="px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300">
                           تلاش نادرست: {toPersianDigits(errs)} از ۳
                         </span>
-                      )}
+                      ) : null}
                       {ex.hint && (
                         <button
                           type="button"
@@ -1647,7 +1864,7 @@ export function CustomSubjectModule({
                               setInputs((p) => ({ ...p, [key]: opt }));
                               checkExercise(exBase, opt);
                             }}
-                            className={`min-h-[42px] px-3 py-2 rounded-xl border text-right text-xs sm:text-sm font-semibold transition-colors disabled:cursor-default ${optCls}`}
+                            className={`min-h-[42px] px-3 py-2 rounded-xl border text-right text-xs sm:text-sm font-semibold transition-colors disabled:cursor-default disabled:opacity-90 ${optCls}`}
                           >
                             <BidiText text={opt} />
                           </button>
@@ -1662,8 +1879,8 @@ export function CustomSubjectModule({
                         value={inputs[key] || ''}
                         onChange={(e) => setInputs((p) => ({ ...p, [key]: e.target.value }))}
                         onKeyDown={(e) => e.key === 'Enter' && checkExercise(exBase)}
-                        className="flex-1 min-w-[180px] min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm disabled:opacity-70"
-                        placeholder="پاسخ خود را بنویسید..."
+                        className="flex-1 min-w-[180px] min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm disabled:opacity-60"
+                        placeholder={isAutoLocked ? 'این سؤال پس از ۳ اشتباه قفل شده است' : 'پاسخ خود را بنویسید...'}
                       />
                       <button
                         type="button"
@@ -1682,50 +1899,43 @@ export function CustomSubjectModule({
                     </div>
                   )}
 
-                  {fb && (
+                  {(fb || isAutoLocked || isSolvedRound) && (
                     <div className="mt-2.5 space-y-2">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div
                           className={`text-xs sm:text-sm font-semibold flex items-center gap-1.5 ${
-                            fb.ok
+                            isSolvedRound
                               ? 'text-emerald-700 dark:text-emerald-300'
-                              : fb.autoRevealed
+                              : isAutoLocked
                               ? 'text-amber-800 dark:text-amber-300'
                               : 'text-red-600 dark:text-red-400'
                           }`}
                         >
-                          {fb.ok ? (
+                          {isSolvedRound ? (
                             <CheckCircle2 className="w-4 h-4 shrink-0" />
-                          ) : fb.autoRevealed ? (
+                          ) : isAutoLocked ? (
                             <AlertTriangle className="w-4 h-4 shrink-0" />
                           ) : (
                             <XCircle className="w-4 h-4 shrink-0" />
                           )}
-                          <span>{fb.msg}</span>
+                          <span>
+                            {fb?.msg ||
+                              (isAutoLocked
+                                ? 'این سؤال پس از ۳ بار پاسخ نادرست قفل شد؛ پاسخ صحیح و راه‌حل کامل در ادامه نمایش داده شده است.'
+                                : 'این تمرین با موفقیت حل شده است.')}
+                          </span>
                         </div>
 
-                        {isLocked && (
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setOpenSolutions((p) => ({ ...p, [key]: !p[key] }))
-                              }
-                              className="px-2.5 py-1 rounded-lg border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-300 text-xs font-bold"
-                            >
-                              {isSolutionOpen ? 'بستن راه‌حل کامل' : 'نمایش راه‌حل کامل'}
-                            </button>
-                            {fb.autoRevealed && (
-                              <button
-                                type="button"
-                                onClick={() => resetSingleQuestion(exBase.id)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 text-xs font-bold"
-                              >
-                                <RotateCcw className="w-3.5 h-3.5" />
-                                <span>تمرین مجدد</span>
-                              </button>
-                            )}
-                          </div>
+                        {isSolvedRound && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenSolutions((p) => ({ ...p, [key]: !p[key] }))
+                            }
+                            className="px-2.5 py-1 rounded-lg border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-300 text-xs font-bold"
+                          >
+                            {isSolutionOpen ? 'بستن راه‌حل کامل' : 'نمایش راه‌حل کامل'}
+                          </button>
                         )}
                       </div>
 
@@ -1733,7 +1943,7 @@ export function CustomSubjectModule({
                         <StepByStepSolutionBox
                           steps={ex.solutionSteps}
                           explain={ex.explain}
-                          correctAnswerLabel={fb.autoRevealed ? correctDisplay : undefined}
+                          correctAnswerLabel={isAutoLocked ? correctDisplay : undefined}
                         />
                       )}
                     </div>
@@ -1787,19 +1997,31 @@ export function CustomSubjectModule({
                   آزمون جامع {ch.title}
                 </div>
                 <div className="text-xs text-slate-600 dark:text-slate-400 tabular-nums">
-                  {toPersianDigits(ch.quiz.length)} سؤال چهارگزینه‌ای استاندارد همراه با کارنامه و پاسخ تشریحی
+                  سری {toPersianDigits(activeQuizRound + 1)} · {toPersianDigits(activeQuizQuestions.length)} سؤال چهارگزینه‌ای همراه با کارنامه و ذخیره پاسخ‌نامه
                 </div>
               </div>
-              {ch.quiz.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setPrintMode('quiz')}
-                  className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-900 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-xs sm:text-sm font-bold shadow-sm"
-                >
-                  <Printer className="w-4 h-4 shrink-0" />
-                  <span>چاپ نمونه سؤالات آزمون</span>
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {activeQuizQuestions.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleChangeQuizQuestions}
+                    className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-bold shadow-sm"
+                  >
+                    <Shuffle className="w-4 h-4 shrink-0" />
+                    <span>تغییر سؤالات آزمون</span>
+                  </button>
+                )}
+                {activeQuizQuestions.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setPrintMode('quiz')}
+                    className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-900 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-xs sm:text-sm font-bold shadow-sm"
+                  >
+                    <Printer className="w-4 h-4 shrink-0" />
+                    <span>چاپ برگه آزمون</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {chapterBest && (
@@ -1809,140 +2031,387 @@ export function CustomSubjectModule({
               </div>
             )}
 
-            {quizSubmitted && (
-              <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-sm sm:text-base font-bold text-emerald-900 dark:text-emerald-200 tabular-nums">
-                نتیجه این آزمون:{' '}
-                {toPersianDigits(
-                  ch.quiz.filter((q, i) => quizAnswers[i] === q.ans).length
-                )}{' '}
-                پاسخ درست از {toPersianDigits(ch.quiz.length)} سؤال — نمره:{' '}
-                {toPersianDigits(
-                  Math.round(
-                    ((ch.quiz.filter((q, i) => quizAnswers[i] === q.ans).length /
-                      ch.quiz.length) *
-                      20) *
-                      10
-                  ) / 10
-                )}{' '}
-                از ۲۰
+            {/* Saved Answer Sheets History Selector for Review & Analysis */}
+            {chapterSheets.length > 0 && (
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                    <History className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <span>پاسخ‌نامه‌های ذخیره‌شده این فصل ({toPersianDigits(chapterSheets.length)})</span>
+                  </div>
+                  {activeReviewSheet && (
+                    <button
+                      type="button"
+                      onClick={() => setReviewSheetId(null)}
+                      className="text-xs font-bold text-blue-700 dark:text-blue-300 hover:underline"
+                    >
+                      بازگشت به آزمون فعلی
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {chapterSheets.slice(0, 8).map((sh) => {
+                    const dateLabel = new Date(sh.timestamp).toLocaleDateString('fa-IR');
+                    return (
+                      <button
+                        key={sh.id}
+                        type="button"
+                        onClick={() => {
+                          setReviewSheetId(reviewSheetId === sh.id ? null : sh.id);
+                          setSheetFilter('all');
+                        }}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-bold tabular-nums transition-colors ${
+                          reviewSheetId === sh.id
+                            ? 'bg-blue-700 border-blue-700 text-white'
+                            : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+                        }`}
+                      >
+                        نمره {toPersianDigits(sh.grade20)} از ۲۰ ({toPersianDigits(sh.score)}/{toPersianDigits(sh.total)}) · {dateLabel}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
-            {ch.quiz.length === 0 ? (
+            {activeQuizQuestions.length === 0 ? (
               <p className="text-sm text-slate-500">آزمونی برای این فصل تعریف نشده است.</p>
             ) : (
               <>
-                {ch.quiz.map((q, idx) => {
-                  const chosen = quizAnswers[idx];
-                  const isCorrect = quizSubmitted && chosen === q.ans;
-                  return (
-                    <div
-                      key={idx}
-                      className={`p-4 rounded-xl border space-y-2.5 ${
-                        quizSubmitted
-                          ? isCorrect
-                            ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-800'
-                            : 'bg-red-50/40 dark:bg-red-950/20 border-red-300 dark:border-red-800'
-                          : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700'
-                      }`}
-                    >
-                      <div className="font-bold text-sm leading-relaxed">
-                        {toPersianDigits(idx + 1)}) <BidiText text={q.q} />
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {q.opts.map((opt, oIdx) => {
-                          let labelCls =
-                            'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900';
-                          if (quizSubmitted) {
-                            if (oIdx === q.ans) {
-                              labelCls =
-                                'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 font-bold text-emerald-900 dark:text-emerald-200';
-                            } else if (chosen === oIdx && oIdx !== q.ans) {
-                              labelCls =
-                                'border-red-400 bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-200';
-                            }
-                          }
-                          return (
-                            <label
-                              key={oIdx}
-                              className={`min-h-[42px] flex items-center gap-2 p-2.5 rounded-xl border text-xs sm:text-sm cursor-pointer ${labelCls}`}
-                            >
-                              <input
-                                type="radio"
-                                name={`cust_q_${idx}`}
-                                checked={chosen === oIdx}
-                                disabled={quizSubmitted}
-                                onChange={() =>
-                                  setQuizAnswers((p) => ({ ...p, [idx]: oIdx }))
+                {!activeReviewSheet && (
+                  <>
+                    {activeQuizQuestions.map((q, idx) => {
+                      const chosen = quizAnswers[idx];
+                      const isCorrect = quizSubmitted && chosen === q.ans;
+                      return (
+                        <div
+                          key={`${activeQuizRound}-${idx}`}
+                          className={`p-4 rounded-xl border space-y-2.5 ${
+                            quizSubmitted
+                              ? isCorrect
+                                ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-800'
+                                : 'bg-red-50/40 dark:bg-red-950/20 border-red-300 dark:border-red-800'
+                              : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700'
+                          }`}
+                        >
+                          <div className="font-bold text-sm leading-relaxed">
+                            {toPersianDigits(idx + 1)}) <BidiText text={q.q} />
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {q.opts.map((opt, oIdx) => {
+                              let labelCls =
+                                'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900';
+                              if (quizSubmitted) {
+                                if (oIdx === q.ans) {
+                                  labelCls =
+                                    'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/50 font-bold text-emerald-900 dark:text-emerald-200';
+                                } else if (chosen === oIdx && oIdx !== q.ans) {
+                                  labelCls =
+                                    'border-red-400 bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-200';
                                 }
-                                className="accent-blue-600 w-4 h-4 shrink-0"
-                              />
-                              <span>
-                                <BidiText text={opt} />
-                              </span>
-                            </label>
-                          );
-                        })}
+                              } else if (chosen === oIdx) {
+                                labelCls = 'border-blue-500 bg-blue-50/70 dark:bg-blue-950/40';
+                              }
+                              return (
+                                <label
+                                  key={oIdx}
+                                  className={`min-h-[42px] flex items-center gap-2 p-2.5 rounded-xl border text-xs sm:text-sm cursor-pointer ${labelCls}`}
+                                >
+                                  <input
+                                    type="radio"
+                                    name={`cust_q_${activeQuizRound}_${idx}`}
+                                    checked={chosen === oIdx}
+                                    disabled={quizSubmitted}
+                                    onChange={() =>
+                                      setQuizAnswers((p) => ({ ...p, [idx]: oIdx }))
+                                    }
+                                    className="accent-blue-600 w-4 h-4 shrink-0"
+                                  />
+                                  <span>
+                                    <BidiText text={opt} />
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                          {quizSubmitted && (
+                            <StepByStepSolutionBox
+                              steps={q.solutionSteps}
+                              explain={q.explain}
+                              correctAnswerLabel={q.opts[q.ans]}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {!quizSubmitted && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          let score = 0;
+                          let wrongCount = 0;
+                          let unansweredCount = 0;
+                          const items: SavedQuizAnswerItem[] = activeQuizQuestions.map((q, i) => {
+                            const sel = quizAnswers[i];
+                            if (sel === undefined) unansweredCount++;
+                            else if (sel === q.ans) score++;
+                            else wrongCount++;
+                            return {
+                              q: q.q,
+                              opts: q.opts,
+                              selectedIndex: sel ?? null,
+                              correctIndex: q.ans,
+                              explain: q.explain,
+                              solutionSteps: q.solutionSteps,
+                            };
+                          });
+                          const total = activeQuizQuestions.length;
+                          const grade20 = Math.round(((score / total) * 20) * 10) / 10;
+                          const pct = Math.round((score / total) * 100);
+                          const newSheet: SavedQuizSheet = {
+                            id: `sheet_${pkg.id}_${ch.id}_${Date.now()}`,
+                            chapterId: ch.id,
+                            chapterTitle: ch.title,
+                            round: activeQuizRound + 1,
+                            score,
+                            wrongCount,
+                            unansweredCount,
+                            total,
+                            grade20,
+                            pct,
+                            timestamp: Date.now(),
+                            items,
+                          };
+                          setQuizSubmitted(true);
+                          setSheetFilter('all');
+                          onUpdateProgress((p) => {
+                            const prevBest = p.quizBest?.[ch.id];
+                            const nextBest =
+                              !prevBest || grade20 >= prevBest.grade20
+                                ? { score, total, grade20 }
+                                : prevBest;
+                            return {
+                              ...p,
+                              quizBest: {
+                                ...p.quizBest,
+                                [ch.id]: nextBest,
+                              },
+                              quizHistory: [
+                                {
+                                  chapterId: ch.id,
+                                  score,
+                                  total,
+                                  grade20,
+                                  timestamp: Date.now(),
+                                },
+                                ...p.quizHistory,
+                              ],
+                              quizSheets: [newSheet, ...(p.quizSheets || [])].slice(0, 40),
+                            };
+                          });
+                        }}
+                        className="w-full min-h-[48px] py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm sm:text-base shadow-sm"
+                      >
+                        پایان آزمون، ثبت نمره و نمایش کارنامه + پاسخ‌نامه کامل
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {/* End-of-Quiz Final Score Card & Saved/Submitted Answer Sheet Review */}
+                {(() => {
+                  const summarySheet: SavedQuizSheet | null = activeReviewSheet
+                    ? activeReviewSheet
+                    : quizSubmitted
+                    ? (() => {
+                        let score = 0;
+                        let wrongCount = 0;
+                        let unansweredCount = 0;
+                        const items: SavedQuizAnswerItem[] = activeQuizQuestions.map((q, i) => {
+                          const sel = quizAnswers[i];
+                          if (sel === undefined) unansweredCount++;
+                          else if (sel === q.ans) score++;
+                          else wrongCount++;
+                          return {
+                            q: q.q,
+                            opts: q.opts,
+                            selectedIndex: sel ?? null,
+                            correctIndex: q.ans,
+                            explain: q.explain,
+                            solutionSteps: q.solutionSteps,
+                          };
+                        });
+                        const total = activeQuizQuestions.length;
+                        return {
+                          id: 'current',
+                          chapterId: ch.id,
+                          chapterTitle: ch.title,
+                          round: activeQuizRound + 1,
+                          score,
+                          wrongCount,
+                          unansweredCount,
+                          total,
+                          grade20: Math.round(((score / total) * 20) * 10) / 10,
+                          pct: Math.round((score / total) * 100),
+                          timestamp: Date.now(),
+                          items,
+                        };
+                      })()
+                    : null;
+
+                  if (!summarySheet) return null;
+
+                  return (
+                    <div className="mt-5 space-y-4">
+                      {/* Score Summary Card at End of Quiz */}
+                      <div className="p-5 rounded-2xl bg-slate-900 dark:bg-slate-800 text-white space-y-3 text-center">
+                        <div className="text-base sm:text-xl font-extrabold tabular-nums">
+                          نمره نهایی: {toPersianDigits(summarySheet.grade20)} از ۲۰ ({toPersianDigits(summarySheet.pct)}٪)
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-w-xl mx-auto text-xs font-bold tabular-nums">
+                          <div className="p-2 rounded-xl bg-slate-800 dark:bg-slate-900 border border-slate-700">
+                            کل سؤالات: {toPersianDigits(summarySheet.total)}
+                          </div>
+                          <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                            درست: {toPersianDigits(summarySheet.score)}
+                          </div>
+                          <div className="p-2 rounded-xl bg-red-500/20 text-red-300 border border-red-500/30">
+                            غلط: {toPersianDigits(summarySheet.wrongCount)}
+                          </div>
+                          <div className="p-2 rounded-xl bg-slate-700 text-slate-200">
+                            نزده: {toPersianDigits(summarySheet.unansweredCount)}
+                          </div>
+                        </div>
+                        <div className="w-full h-3 bg-slate-700 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-l from-sky-400 to-emerald-400 transition-all duration-500"
+                            style={{ width: `${summarySheet.pct}%` }}
+                          />
+                        </div>
+                        <div className="flex flex-wrap justify-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={handleChangeQuizQuestions}
+                            className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs sm:text-sm"
+                          >
+                            <Shuffle className="w-4 h-4" />
+                            <span>آزمون مجدد با سؤالات جدید</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setQuizAnswers({});
+                              setQuizSubmitted(false);
+                              setReviewSheetId(null);
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            className="min-h-[42px] inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-600 text-slate-200 hover:bg-slate-800 font-bold text-xs sm:text-sm"
+                          >
+                            <span>پاسخ‌دهی دوباره به همین سری</span>
+                          </button>
+                        </div>
                       </div>
-                      {quizSubmitted && (
-                        <StepByStepSolutionBox
-                          steps={q.solutionSteps}
-                          explain={q.explain}
-                          correctAnswerLabel={q.opts[q.ans]}
-                        />
-                      )}
+
+                      {/* Complete Answer Sheet Info & Analysis Table */}
+                      <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="font-bold text-sm sm:text-base flex items-center gap-1.5 text-slate-900 dark:text-slate-100">
+                            <ClipboardList className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                            <span>اطلاعات کامل پاسخ‌نامه (بررسی و تحلیل سؤال به سؤال)</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5 text-xs font-bold">
+                            {(
+                              [
+                                { id: 'all', label: 'همه' },
+                                { id: 'wrong', label: 'اشتباهات' },
+                                { id: 'correct', label: 'درست‌ها' },
+                                { id: 'unanswered', label: 'نزده‌ها' },
+                              ] as const
+                            ).map((f) => (
+                              <button
+                                key={f.id}
+                                type="button"
+                                onClick={() => setSheetFilter(f.id)}
+                                className={`px-2.5 py-1 rounded-lg border ${
+                                  sheetFilter === f.id
+                                    ? 'bg-blue-600 border-blue-600 text-white'
+                                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                                }`}
+                              >
+                                {f.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="space-y-2.5">
+                          {summarySheet.items.map((it, i) => {
+                            const isUnans = it.selectedIndex === null;
+                            const isOk = !isUnans && it.selectedIndex === it.correctIndex;
+                            if (sheetFilter === 'wrong' && (isOk || isUnans)) return null;
+                            if (sheetFilter === 'correct' && !isOk) return null;
+                            if (sheetFilter === 'unanswered' && !isUnans) return null;
+
+                            return (
+                              <div
+                                key={i}
+                                className={`p-3.5 rounded-xl border text-xs sm:text-sm space-y-1.5 ${
+                                  isOk
+                                    ? 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800'
+                                    : isUnans
+                                    ? 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700'
+                                    : 'bg-red-50/60 dark:bg-red-950/30 border-red-200 dark:border-red-800'
+                                }`}
+                              >
+                                <div className="font-bold flex items-start justify-between gap-2">
+                                  <span>
+                                    {toPersianDigits(i + 1)}) <BidiText text={it.q} />
+                                  </span>
+                                  <span
+                                    className={`text-[11px] font-bold shrink-0 px-2 py-0.5 rounded-md ${
+                                      isOk
+                                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200'
+                                        : isUnans
+                                        ? 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                                        : 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-200'
+                                    }`}
+                                  >
+                                    {isOk ? 'درست' : isUnans ? 'نزده' : 'نادرست'}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-slate-700 dark:text-slate-300 space-y-1">
+                                  <div>
+                                    انتخاب شما:{' '}
+                                    <strong>
+                                      {it.selectedIndex !== null ? (
+                                        <BidiText text={it.opts[it.selectedIndex] || '—'} />
+                                      ) : (
+                                        'بدون پاسخ'
+                                      )}
+                                    </strong>
+                                  </div>
+                                  {!isOk && (
+                                    <div className="text-emerald-700 dark:text-emerald-300">
+                                      پاسخ صحیح:{' '}
+                                      <strong>
+                                        <BidiText text={it.opts[it.correctIndex] || ''} />
+                                      </strong>
+                                    </div>
+                                  )}
+                                  <StepByStepSolutionBox
+                                    steps={it.solutionSteps}
+                                    explain={it.explain}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
                   );
-                })}
-                {!quizSubmitted ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const score = ch.quiz.filter((q, i) => quizAnswers[i] === q.ans).length;
-                      const grade20 = Math.round(((score / ch.quiz.length) * 20) * 10) / 10;
-                      setQuizSubmitted(true);
-                      onUpdateProgress((p) => {
-                        const prevBest = p.quizBest?.[ch.id];
-                        const nextBest =
-                          !prevBest || grade20 >= prevBest.grade20
-                            ? { score, total: ch.quiz.length, grade20 }
-                            : prevBest;
-                        return {
-                          ...p,
-                          quizBest: {
-                            ...p.quizBest,
-                            [ch.id]: nextBest,
-                          },
-                          quizHistory: [
-                            {
-                              chapterId: ch.id,
-                              score,
-                              total: ch.quiz.length,
-                              grade20,
-                              timestamp: Date.now(),
-                            },
-                            ...p.quizHistory,
-                          ],
-                        };
-                      });
-                    }}
-                    className="w-full min-h-[46px] py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm"
-                  >
-                    ثبت آزمون فصل
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQuizAnswers({});
-                      setQuizSubmitted(false);
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    }}
-                    className="w-full min-h-[44px] py-2 rounded-xl border border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 font-bold text-sm"
-                  >
-                    آزمون مجدد فصل
-                  </button>
-                )}
+                })()}
               </>
             )}
           </div>
@@ -1963,7 +2432,7 @@ export function CustomSubjectModule({
         gradeLabel={studentGradeLabel}
         questions={
           (printMode === 'quiz'
-            ? ch.quiz.map((q) => ({
+            ? activeQuizQuestions.map((q) => ({
                 prompt: q.q,
                 options: q.opts,
                 correctAnswer: q.opts[q.ans],

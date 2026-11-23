@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import type { AudioTrackRef } from '../types/courses';
+import type { AudioTrackRef, CustomSubjectPackage } from '../types/courses';
 
 export type AudioBookType = 'sb' | 'wb' | 'video';
 
@@ -309,4 +309,135 @@ export function normalizeEnglishAnswer(val: string): string {
     .replace(/[’‘`]/g, "'")
     .replace(/\s+/g, ' ')
     .replace(/[.!?]+$/g, '');
+}
+
+export const DEFAULT_AEF1_MEDIA_BASE_URL = 'https://ha1358.github.io/amoozeshyar/media/aef1';
+
+export function resolveMediaSubfolder(track: AudioTrackRef): string {
+  if (track.url) {
+    const m = track.url.match(/\/(sb-audio|wb-audio|pe-videos|listening-videos|review-videos)\//i);
+    if (m?.[1]) return m[1];
+  }
+  const fn = (track.fileName || '').toLowerCase();
+  if (track.book === 'wb' || fn.includes('_wb_')) return 'wb-audio';
+  if (track.book === 'video' || isVideoFilename(fn) || track.mediaType === 'video') {
+    if (fn.includes('_pe_')) return 'pe-videos';
+    if (fn.includes('review_and_check')) return 'review-videos';
+    return 'listening-videos';
+  }
+  return 'sb-audio';
+}
+
+export function resolveTrackOnlineUrl(track: AudioTrackRef, baseUrl: string): string | undefined {
+  const cleanBase = baseUrl.trim().replace(/\/+$/, '');
+  if (!cleanBase || !track.fileName) return track.url;
+  const folder = resolveMediaSubfolder(track);
+  const encodedFile = encodeURIComponent(track.fileName);
+  return `${cleanBase}/${folder}/${encodedFile}`;
+}
+
+export function bindOnlineCourseMediaUrls(
+  pkg: CustomSubjectPackage,
+  baseUrl: string
+): {
+  updatedPkg: CustomSubjectPackage;
+  sbOnlineCount: number;
+  wbOnlineCount: number;
+  videoOnlineCount: number;
+  sampleUrl?: string;
+} {
+  let sbOnlineCount = 0;
+  let wbOnlineCount = 0;
+  let videoOnlineCount = 0;
+  let sampleUrl: string | undefined;
+
+  const updatedChapters = pkg.chapters.map((ch) => ({
+    ...ch,
+    lessons: ch.lessons.map((l) => {
+      if (!l.audioTracks || l.audioTracks.length === 0) return l;
+      const nextTracks = l.audioTracks.map((tr) => {
+        const nextUrl = resolveTrackOnlineUrl(tr, baseUrl);
+        if (nextUrl) {
+          if (!sampleUrl && !isVideoFilename(tr.fileName || nextUrl)) {
+            sampleUrl = nextUrl;
+          }
+          const isVid =
+            tr.book === 'video' ||
+            tr.mediaType === 'video' ||
+            Boolean(tr.fileName && isVideoFilename(tr.fileName));
+          if (isVid) videoOnlineCount++;
+          else if (tr.book === 'wb') wbOnlineCount++;
+          else sbOnlineCount++;
+        }
+        return {
+          ...tr,
+          ...(nextUrl ? { url: nextUrl } : {}),
+        };
+      });
+      return {
+        ...l,
+        audioTracks: nextTracks,
+      };
+    }),
+  }));
+
+  return {
+    updatedPkg: { ...pkg, chapters: updatedChapters },
+    sbOnlineCount,
+    wbOnlineCount,
+    videoOnlineCount,
+    sampleUrl,
+  };
+}
+
+export function countOnlineCourseMedia(pkg?: CustomSubjectPackage | null): {
+  sbOnlineCount: number;
+  wbOnlineCount: number;
+  videoOnlineCount: number;
+  sampleUrl?: string;
+} {
+  if (!pkg) return { sbOnlineCount: 0, wbOnlineCount: 0, videoOnlineCount: 0 };
+  let sbOnlineCount = 0;
+  let wbOnlineCount = 0;
+  let videoOnlineCount = 0;
+  let sampleUrl: string | undefined;
+  for (const ch of pkg.chapters) {
+    for (const l of ch.lessons) {
+      for (const tr of l.audioTracks || []) {
+        if (!tr.url) continue;
+        if (!sampleUrl && !isVideoFilename(tr.fileName || tr.url)) {
+          sampleUrl = tr.url;
+        }
+        const isVid =
+          tr.book === 'video' ||
+          tr.mediaType === 'video' ||
+          Boolean(tr.fileName && isVideoFilename(tr.fileName));
+        if (isVid) videoOnlineCount++;
+        else if (tr.book === 'wb') wbOnlineCount++;
+        else sbOnlineCount++;
+      }
+    }
+  }
+  return { sbOnlineCount, wbOnlineCount, videoOnlineCount, sampleUrl };
+}
+
+export async function fetchAudioZipFromUrl(url: string): Promise<AudioCandidateItem[]> {
+  const cleanUrl = url.trim();
+  const res = await fetch(cleanUrl, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const buf = await res.arrayBuffer();
+  const zip = await JSZip.loadAsync(buf);
+  const candidates: AudioCandidateItem[] = [];
+  for (const entry of Object.values(zip.files)) {
+    if (entry.dir) continue;
+    const cleanName = entry.name.split('/').pop() || entry.name;
+    if (!MEDIA_EXT_RE.test(cleanName)) continue;
+    const blob = await entry.async('blob');
+    candidates.push({
+      fileName: cleanName,
+      relativePath: entry.name,
+      blob,
+    });
+  }
+  return candidates;
 }

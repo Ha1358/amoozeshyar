@@ -744,11 +744,34 @@ export function mergeProgressMapsPreserving(
       }
     }
 
+    const mergedLocked: Record<string, Record<string, boolean>> = {
+      ...(inc.exerciseLocked || {}),
+    };
+    for (const [lessonKey, lockObj] of Object.entries(cur.exerciseLocked || {})) {
+      mergedLocked[lessonKey] = {
+        ...(mergedLocked[lessonKey] || {}),
+        ...lockObj,
+      };
+    }
+
+    const sheetKeys = new Set(
+      (cur.quizSheets || []).map((s) => s.id || `${s.chapterId}:${s.timestamp}`)
+    );
+    const mergedSheets = [...(cur.quizSheets || [])];
+    for (const sh of inc.quizSheets || []) {
+      const sk = sh.id || `${sh.chapterId}:${sh.timestamp}`;
+      if (!sheetKeys.has(sk)) {
+        mergedSheets.push(sh);
+      }
+    }
+
     merged[courseId] = {
       lessonsStudied: mergedLessonsStudied,
       exerciseSolved: mergedExercises,
+      exerciseLocked: mergedLocked,
       quizBest: mergedQuizBest,
       quizHistory: mergedHistory.sort((a, b) => b.timestamp - a.timestamp).slice(0, 100),
+      quizSheets: mergedSheets.sort((a, b) => b.timestamp - a.timestamp).slice(0, 40),
     };
   }
 

@@ -9,8 +9,8 @@ import { VitePWA } from 'vite-plugin-pwa';
 const pkgJson = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')
 ) as { version?: string };
-const APP_VERSION = pkgJson.version || '2.3.7';
-const APK_VERSION_CODE = 30;
+const APP_VERSION = pkgJson.version || '2.3.9';
+const APK_VERSION_CODE = 32;
 const rawBase = process.env.GITHUB_PAGES_BASE || '/';
 const PAGES_BASE = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
 
@@ -77,6 +77,22 @@ function pwaDevSafePlugin() {
   };
 }
 
+function excludeTempUploadsPlugin() {
+  let outDir = 'dist';
+  return {
+    name: 'exclude-aistudio-temp-uploads',
+    configResolved(config: { build: { outDir: string } }) {
+      outDir = config.build.outDir || 'dist';
+    },
+    closeBundle() {
+      const tempDir = path.resolve(__dirname, outDir, 'assets', 'aistudio');
+      if (fs.existsSync(tempDir)) {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  };
+}
+
 export default defineConfig(() => {
   const isSingleFile = process.env.BUILD_SINGLEFILE === '1';
 
@@ -89,6 +105,7 @@ export default defineConfig(() => {
     plugins: [
       react(),
       tailwindcss(),
+      excludeTempUploadsPlugin(),
       ...(isSingleFile
         ? [viteSingleFile()]
         : [

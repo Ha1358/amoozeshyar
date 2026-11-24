@@ -7,6 +7,10 @@ export interface PlatformEnvInfo {
 
 export interface NativeApkUpdateBridge {
   installApkUpdate?: (url: string) => boolean | void;
+  installApkUpdateForVersion?: (url: string, targetVersionCode: number) => boolean | void;
+  hasCachedApkUpdate?: (url: string) => boolean;
+  hasCachedApkUpdateForVersion?: (url: string, targetVersionCode: number) => boolean;
+  getInstalledVersionCode?: () => number;
   exitApp?: () => void;
 }
 
@@ -51,7 +55,36 @@ export function hasNativeApkInstallerBridge(): boolean {
   return typeof window !== 'undefined' && typeof window.AmoozeshyarAndroid?.installApkUpdate === 'function';
 }
 
-export async function triggerOneClickApkDownload(apkUrl: string): Promise<{
+export function checkNativeCachedApkUpdate(
+  apkUrl: string | undefined,
+  targetVersionCode?: number
+): boolean {
+  if (typeof window === 'undefined' || !apkUrl) return false;
+  const cleanUrl = apkUrl.trim();
+  if (!cleanUrl) return false;
+  try {
+    const bridge = window.AmoozeshyarAndroid;
+    if (!bridge) return false;
+    if (
+      typeof targetVersionCode === 'number' &&
+      targetVersionCode > 0 &&
+      typeof bridge.hasCachedApkUpdateForVersion === 'function'
+    ) {
+      return Boolean(bridge.hasCachedApkUpdateForVersion(cleanUrl, targetVersionCode));
+    }
+    if (typeof bridge.hasCachedApkUpdate === 'function') {
+      return Boolean(bridge.hasCachedApkUpdate(cleanUrl));
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export async function triggerOneClickApkDownload(
+  apkUrl: string,
+  targetVersionCode?: number
+): Promise<{
   ok: boolean;
   msg: string;
   usedNativeInstaller?: boolean;
@@ -62,14 +95,35 @@ export async function triggerOneClickApkDownload(apkUrl: string): Promise<{
   }
 
   try {
-    // 1) Native Android In-App DownloadManager + FileProvider PackageInstaller Bridge
-    if (typeof window !== 'undefined' && window.AmoozeshyarAndroid?.installApkUpdate) {
-      window.AmoozeshyarAndroid.installApkUpdate(cleanUrl);
-      return {
-        ok: true,
-        usedNativeInstaller: true,
-        msg: 'دریافت نسخه جدید در حال انجام است؛ بلافاصله پس از اتمام دانلود، پنجره نصب داخل برنامه باز می‌شود.',
-      };
+    // 1) Native Android Resumable/Cached Downloader + PackageInstaller Bridge
+    const bridge = typeof window !== 'undefined' ? window.AmoozeshyarAndroid : undefined;
+    if (bridge) {
+      if (
+        typeof targetVersionCode === 'number' &&
+        targetVersionCode > 0 &&
+        typeof bridge.installApkUpdateForVersion === 'function'
+      ) {
+        const alreadyCached = checkNativeCachedApkUpdate(cleanUrl, targetVersionCode);
+        bridge.installApkUpdateForVersion(cleanUrl, targetVersionCode);
+        return {
+          ok: true,
+          usedNativeInstaller: true,
+          msg: alreadyCached
+            ? 'فایل نسخه جدید از قبل آماده بود؛ پنجره نصب سیستم در حال باز شدن است.'
+            : 'دریافت نسخه جدید در حال انجام است؛ بلافاصله پس از اتمام، پنجره نصب سیستم باز می‌شود.',
+        };
+      }
+      if (bridge.installApkUpdate) {
+        const alreadyCached = checkNativeCachedApkUpdate(cleanUrl);
+        bridge.installApkUpdate(cleanUrl);
+        return {
+          ok: true,
+          usedNativeInstaller: true,
+          msg: alreadyCached
+            ? 'فایل نسخه جدید از قبل آماده بود؛ پنجره نصب سیستم در حال باز شدن است.'
+            : 'دریافت نسخه جدید در حال انجام است؛ بلافاصله پس از اتمام، پنجره نصب سیستم باز می‌شود.',
+        };
+      }
     }
 
     // 2) Capacitor Browser fallback if available

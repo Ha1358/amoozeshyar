@@ -9,8 +9,15 @@ import { VitePWA } from 'vite-plugin-pwa';
 const pkgJson = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')
 ) as { version?: string };
-const APP_VERSION = pkgJson.version || '2.3.9';
-const APK_VERSION_CODE = 32;
+const versionJsonPath = path.resolve(__dirname, 'public', 'version.json');
+const versionJson = fs.existsSync(versionJsonPath)
+  ? (JSON.parse(fs.readFileSync(versionJsonPath, 'utf-8')) as {
+      version?: string;
+      versionCode?: number;
+    })
+  : {};
+const APP_VERSION = pkgJson.version || versionJson.version || '2.3.11';
+const APK_VERSION_CODE = Number(versionJson.versionCode || 34);
 const rawBase = process.env.GITHUB_PAGES_BASE || '/';
 const PAGES_BASE = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
 
@@ -112,6 +119,7 @@ export default defineConfig(() => {
             pwaDevSafePlugin(),
             VitePWA({
               registerType: 'autoUpdate',
+              injectRegister: false,
               includeAssets: [
                 'icon.svg',
                 'apple-touch-icon.png',

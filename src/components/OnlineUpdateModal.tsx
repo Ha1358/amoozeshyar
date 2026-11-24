@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import type { AppBackupBundle } from '../types/courses';
 import {
+  checkNativeCachedApkUpdate,
   detectPlatformEnv,
   hasNativeApkInstallerBridge,
   triggerOneClickApkDownload,
@@ -24,9 +25,9 @@ import {
 import { toPersianDigits } from '../utils/mathHelpers';
 import { triggerOfflineHtmlDownload } from './Modals';
 
-export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '2.3.10';
+export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '2.3.11';
 export const APK_VERSION_CODE =
-  typeof __APK_VERSION_CODE__ !== 'undefined' ? __APK_VERSION_CODE__ : 33;
+  typeof __APK_VERSION_CODE__ !== 'undefined' ? __APK_VERSION_CODE__ : 34;
 
 const REMOTE_UPDATE_URL_KEY = 'amoozeshyar_update_url_v1';
 const DEFAULT_PUBLIC_ORIGIN = 'https://ha1358.github.io/amoozeshyar';
@@ -241,7 +242,16 @@ export function OnlineUpdateModal({
   const [appStatus, setAppStatus] = useState<AppUpdateStatusState>(
     initialUpdateStatus || { type: 'idle', msg: '' }
   );
+  const [hasCachedApk, setHasCachedApk] = useState(false);
   const [localAppMsg, setLocalAppMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const refreshCachedApkFlag = (apkUrl?: string, versionCode?: number) => {
+    setHasCachedApk(checkNativeCachedApkUpdate(apkUrl, versionCode));
+  };
+
+  useEffect(() => {
+    refreshCachedApkFlag(appStatus.apkUrl, appStatus.remoteVersionCode);
+  }, [appStatus.apkUrl, appStatus.remoteVersionCode, open]);
 
   useEffect(() => {
     const onProgress = (ev: Event) => {
@@ -256,11 +266,12 @@ export function OnlineUpdateModal({
       });
       if (detail.done || detail.error) {
         setDownloadingApk(false);
+        refreshCachedApkFlag(appStatus.apkUrl, appStatus.remoteVersionCode);
       }
     };
     window.addEventListener('amoozeshyar-apk-progress', onProgress);
     return () => window.removeEventListener('amoozeshyar-apk-progress', onProgress);
-  }, []);
+  }, [appStatus.apkUrl, appStatus.remoteVersionCode]);
 
   const handleCheckAppUpdate = async () => {
     if (isOffline) {
@@ -336,12 +347,16 @@ export function OnlineUpdateModal({
     setDownloadingApk(true);
     setApkActionMsg(null);
     if (hasNativeBridge) {
+      const isCached = checkNativeCachedApkUpdate(appStatus.apkUrl, appStatus.remoteVersionCode);
+      setHasCachedApk(isCached);
       setApkProgress({
-        percent: 5,
-        status: 'شروع دریافت و آماده‌سازی نصب خودکار داخل برنامه...',
+        percent: isCached ? 100 : 5,
+        status: isCached
+          ? 'نسخه جدید از قبل آماده است؛ در حال باز کردن پنجره نصب سیستم...'
+          : 'شروع دریافت و آماده‌سازی نصب خودکار داخل برنامه...',
       });
     }
-    const res = await triggerOneClickApkDownload(appStatus.apkUrl);
+    const res = await triggerOneClickApkDownload(appStatus.apkUrl, appStatus.remoteVersionCode);
     setApkActionMsg({ ok: res.ok, text: res.msg });
     if (!res.usedNativeInstaller || !res.ok) {
       setDownloadingApk(false);
@@ -447,7 +462,11 @@ export function OnlineUpdateModal({
                         <Smartphone className="w-4 h-4 shrink-0" />
                         <span>
                           {downloadingApk
-                            ? 'در حال دریافت و آماده‌سازی نصب...'
+                            ? hasCachedApk
+                              ? 'در حال باز کردن پنجره نصب سیستم...'
+                              : 'در حال دریافت و آماده‌سازی نصب...'
+                            : hasCachedApk
+                            ? 'نصب نسخه جدید دانلودشده (بدون دانلود مجدد)'
                             : 'بروزرسانی با یک کلیک (نصب مستقیم داخل برنامه)'}
                         </span>
                       </button>

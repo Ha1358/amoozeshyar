@@ -1,4 +1,4 @@
-# آموزش یار (Amoozeshyar) — نسخه ۲.۳.۱۰
+# آموزش یار (Amoozeshyar) — نسخه ۲.۳.۱۱
 
 اپلیکیشن آموزشی جامع فارسی (وب، فایل مستقل آفلاین و اپلیکیشن اندروید) برای یادگیری گام‌به‌گام دروس ریاضی و زبان انگلیسی از سطح صفر تا پیشرفته، همراه با درسنامه‌های رنگی، آزمایشگاه‌های بصری و تعاملی، فرمول‌های هر درس، تمرین‌های هدفمند و آزمون‌های تحلیلی.
 
@@ -71,7 +71,7 @@ npx cap open android
 
 ```bash
 git add .
-git commit -m "chore: release v2.3.9"
+git commit -m "chore: release v2.3.11"
 git push origin main
-node F:\Amozeshyar\release-apk.mjs
+node scripts/release-apk.mjs
 ```

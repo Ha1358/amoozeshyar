@@ -15,8 +15,8 @@ const versionJson = fs.existsSync(versionJsonPath)
   ? JSON.parse(fs.readFileSync(versionJsonPath, 'utf8'))
   : {};
 
-const appVersion = String(pkgJson.version || versionJson.version || '2.3.11');
-const appVersionCode = Number(versionJson.versionCode || 34);
+const appVersion = String(pkgJson.version || versionJson.version || '2.3.12');
+const appVersionCode = Number(versionJson.versionCode || 35);
 
 function findFileRecursive(dir, targetNames) {
   if (!fs.existsSync(dir)) return null;
@@ -48,6 +48,45 @@ if (fs.existsSync(gradleGroovy)) {
   content = content.replace(/\bversionName\s*=\s*"[^"]*"/, `versionName = "${appVersion}"`);
   fs.writeFileSync(gradleKts, content, 'utf8');
   console.log(`[android-bridge] Updated build.gradle.kts -> versionName "${appVersion}", versionCode ${appVersionCode}`);
+}
+
+// 1b) Sync AGP version & Maven repository mirrors from android/build.gradle into @capacitor/android
+const rootBuildGradle = path.join(androidDir, 'build.gradle');
+const capAndroidGradle = path.join(root, 'node_modules', '@capacitor', 'android', 'capacitor', 'build.gradle');
+if (fs.existsSync(rootBuildGradle) && fs.existsSync(capAndroidGradle)) {
+  const rootGradleText = fs.readFileSync(rootBuildGradle, 'utf8');
+  const agpMatch = rootGradleText.match(/com\.android\.tools\.build:gradle:([0-9.]+)/);
+  let capGradleText = fs.readFileSync(capAndroidGradle, 'utf8');
+  let capChanged = false;
+
+  if (agpMatch?.[1]) {
+    const targetAgp = agpMatch[1];
+    const updatedAgp = capGradleText.replace(
+      /com\.android\.tools\.build:gradle:[0-9.]+/g,
+      `com.android.tools.build:gradle:${targetAgp}`
+    );
+    if (updatedAgp !== capGradleText) {
+      capGradleText = updatedAgp;
+      capChanged = true;
+      console.log(`[android-bridge] Synced @capacitor/android AGP version -> ${targetAgp}`);
+    }
+  }
+
+  if (rootGradleText.includes('maven.myket.ir') && !capGradleText.includes('maven.myket.ir')) {
+    const updatedRepos = capGradleText.replace(
+      /(repositories\s*\{\s*\r?\n)/g,
+      "$1        maven { url 'https://maven.myket.ir' }\n"
+    );
+    if (updatedRepos !== capGradleText) {
+      capGradleText = updatedRepos;
+      capChanged = true;
+      console.log('[android-bridge] Added maven.myket.ir repository to @capacitor/android');
+    }
+  }
+
+  if (capChanged) {
+    fs.writeFileSync(capAndroidGradle, capGradleText, 'utf8');
+  }
 }
 
 // 2) Update android/app/src/main/AndroidManifest.xml

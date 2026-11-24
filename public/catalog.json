@@ -27,20 +27,6 @@
       "url": "https://ha1358.github.io/amoozeshyar/courses/math10.json"
     },
     {
-      "id": "physics_grade10_riazi1",
-      "title": "فیزیک ۱ — پایه دهم (ریاضی و فیزیک)",
-      "subtitle": "رشته ریاضی و فیزیک (کد ۱۱۰۲۰۹) · ۵ فصل کامل (۳۲ درس) همراه با درسنامه جامع، فرمول‌ها، تمرین‌های چندسری و آزمون فصل",
-      "version": "1.0.0",
-      "category": "science",
-      "isExtracurricular": false,
-      "educationLevels": ["high"],
-      "grades": ["پایه دهم"],
-      "branches": ["نظری"],
-      "fields": ["ریاضی و فیزیک"],
-      "localPath": "courses/physics10.json",
-      "url": "https://ha1358.github.io/amoozeshyar/courses/physics10.json"
-    },
-    {
       "id": "aef1-v3",
       "title": "زبان انگلیسی (American English File 1)",
       "subtitle": "درس فوق‌برنامه (قابل استفاده در تمام مقاطع) · ۱۲ فصل، ۴۸ درس، ۷۲۰ تمرین تعاملی و آزمون‌ها",

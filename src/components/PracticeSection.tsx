@@ -16,7 +16,7 @@ import type {
   SpeedChallengeRecord,
 } from '../types/math';
 import { chaptersMeta } from '../data/mathData';
-import { normalizeNum, toPersianDigits } from '../utils/mathHelpers';
+import { normalizeMathLiveInput, normalizeNum, toPersianDigits } from '../utils/mathHelpers';
 import { Frac, MathBox, BidiText } from './MathPrimitives';
 import { SpeedChallenge, type SpeedChallengeCompletion } from './SpeedChallenge';
 
@@ -328,11 +328,14 @@ export function PracticeSection({
                             onChange={(e) =>
                               setInputs((prev) => ({
                                 ...prev,
-                                [origIdx]: { ...prev[origIdx], num: e.target.value },
+                                [origIdx]: {
+                                  ...prev[origIdx],
+                                  num: normalizeMathLiveInput(e.target.value),
+                                },
                               }))
                             }
                             onKeyDown={(e) => e.key === 'Enter' && checkAnswer(origIdx)}
-                            className="w-20 min-h-[38px] text-center py-1 px-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-bold disabled:opacity-50"
+                            className="w-20 min-h-[38px] text-center [direction:ltr] [unicode-bidi:isolate] py-1 px-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-bold disabled:opacity-50"
                           />
                           <div className="w-full h-0.5 bg-slate-800 dark:bg-slate-200 my-1" />
                           <input
@@ -345,11 +348,14 @@ export function PracticeSection({
                             onChange={(e) =>
                               setInputs((prev) => ({
                                 ...prev,
-                                [origIdx]: { ...prev[origIdx], den: e.target.value },
+                                [origIdx]: {
+                                  ...prev[origIdx],
+                                  den: normalizeMathLiveInput(e.target.value),
+                                },
                               }))
                             }
                             onKeyDown={(e) => e.key === 'Enter' && checkAnswer(origIdx)}
-                            className="w-20 min-h-[38px] text-center py-1 px-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-bold disabled:opacity-50"
+                            className="w-20 min-h-[38px] text-center [direction:ltr] [unicode-bidi:isolate] py-1 px-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-bold disabled:opacity-50"
                           />
                         </div>
                       </div>
@@ -364,11 +370,14 @@ export function PracticeSection({
                         onChange={(e) =>
                           setInputs((prev) => ({
                             ...prev,
-                            [origIdx]: { ...prev[origIdx], single: e.target.value },
+                            [origIdx]: {
+                              ...prev[origIdx],
+                              single: normalizeMathLiveInput(e.target.value),
+                            },
                           }))
                         }
                         onKeyDown={(e) => e.key === 'Enter' && checkAnswer(origIdx)}
-                        className="w-36 sm:w-40 min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm font-bold disabled:opacity-50 tabular-nums"
+                        className="w-36 sm:w-40 min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 text-sm font-bold text-left [direction:ltr] [unicode-bidi:isolate] disabled:opacity-50 tabular-nums"
                       />
                     )}
 

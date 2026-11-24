@@ -226,17 +226,17 @@ export function BidiText({
       parts.push(text.slice(lastIndex, start));
     }
     parts.push(
-      <bdi
+      <span
         key={start}
         dir="ltr"
         className={
           highlightMath
-            ? 'inline-block font-bold px-1.5 py-0.5 mx-0.5 rounded-md bg-indigo-50/95 dark:bg-indigo-950/60 text-indigo-800 dark:text-indigo-200 border border-indigo-200/80 dark:border-indigo-800/70 tabular-nums align-middle'
-            : 'inline-block font-semibold px-0.5 tabular-nums align-middle'
+            ? 'inline-block [direction:ltr] [unicode-bidi:isolate] font-bold px-1.5 py-0.5 mx-0.5 rounded-md bg-indigo-50/95 dark:bg-indigo-950/60 text-indigo-800 dark:text-indigo-200 border border-indigo-200/80 dark:border-indigo-800/70 tabular-nums align-middle'
+            : 'inline-block [direction:ltr] [unicode-bidi:isolate] font-semibold px-0.5 tabular-nums align-middle'
         }
       >
         {renderMathNode(token, `m-${start}`)}
-      </bdi>
+      </span>
     );
     lastIndex = start + token.length;
   }

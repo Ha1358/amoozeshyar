@@ -19,17 +19,22 @@ export function seededRng(seed: number): () => number {
   };
 }
 
-export function normalizeNum(s: string | number): string {
+export function normalizeMathLiveInput(s: string): string {
   const map: Record<string, string> = {
     '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
     '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
     '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
     '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
-    '−': '-',
+    '−': '-', '–': '-', '—': '-', '\u2010': '-', '\u2011': '-', '\u2012': '-',
+    '\uFE63': '-', '\uFF0D': '-',
+    '٫': '.', '÷': '/', '⁄': '/', '∕': '/', '؍': '/', '×': '*',
   };
-  return String(s)
+  return s.replace(/[۰-۹٠-٩−–—\u2010-\u2012\uFE63\uFF0D٫÷⁄∕؍×]/g, (ch) => map[ch] ?? ch);
+}
+
+export function normalizeNum(s: string | number): string {
+  return normalizeMathLiveInput(String(s))
     .trim()
-    .replace(/[۰-۹٠-٩−]/g, (d) => map[d] ?? d)
     .replace(/\s+/g, '');
 }
 
@@ -61,16 +66,18 @@ export function normalizeCourseAnswer(val: string): string {
     '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
     '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
     '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
-    '−': '-', '–': '-', '—': '-', '٫': '.', '،': ',',
+    '−': '-', '–': '-', '—': '-', '\u2010': '-', '\u2011': '-', '\u2012': '-',
+    '\uFE63': '-', '\uFF0D': '-',
+    '٫': '.', '،': ',',
+    '÷': '/', '⁄': '/', '∕': '/', '؍': '/',
     'ي': 'ی', 'ك': 'ک', 'ة': 'ه', 'أ': 'ا', 'إ': 'ا',
   };
   let s = val
     .trim()
     .toLowerCase()
-    .replace(/[۰-۹٠-٩−–—٫،يكةأإ]/g, (ch) => digitMap[ch] ?? ch)
+    .replace(/[۰-۹٠-٩−–—\u2010-\u2012\uFE63\uFF0D٫،÷⁄∕؍يكةأإ]/g, (ch) => digitMap[ch] ?? ch)
     .replace(/[’‘`]/g, "'")
     .replace(/×/g, '*')
-    .replace(/÷/g, '/')
     .replace(/\s+/g, ' ')
     .replace(/[.!?؟]+$/g, '')
     .replace(/°/g, '')

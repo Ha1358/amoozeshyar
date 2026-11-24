@@ -23,6 +23,7 @@ import { formatProfileSummary, isProfileComplete } from './ProfileModal';
 import {
   evaluateMathDetailed,
   formatPersianDate,
+  normalizeMathLiveInput,
   normalizeNum,
   toPersianDigits,
 } from '../utils/mathHelpers';
@@ -449,58 +450,23 @@ export function ScratchpadModal({
   const [powBase, setPowBase] = useState('');
   const [powExp, setPowExp] = useState('');
 
-  const inputRef = useRef<HTMLInputElement>(null);
-
   const insertAtCursor = (token: string) => {
-    const el = inputRef.current;
-    if (!el) {
-      setExpr((prev) => prev + token);
-      return;
-    }
-    const start = el.selectionStart ?? expr.length;
-    const end = el.selectionEnd ?? expr.length;
-    const next = expr.slice(0, start) + token + expr.slice(end);
-    setExpr(next);
-    window.requestAnimationFrame(() => {
-      el.focus();
-      const pos = start + token.length;
-      el.setSelectionRange(pos, pos);
-    });
+    setExpr((prev) => prev + token);
   };
 
   const handleBackspace = () => {
-    const el = inputRef.current;
-    if (!el) {
-      setExpr((prev) => prev.slice(0, -1));
-      return;
-    }
-    const start = el.selectionStart ?? expr.length;
-    const end = el.selectionEnd ?? expr.length;
-    if (start !== end) {
-      const next = expr.slice(0, start) + expr.slice(end);
-      setExpr(next);
-      window.requestAnimationFrame(() => {
-        el.focus();
-        el.setSelectionRange(start, start);
-      });
-    } else if (start > 0) {
-      const next = expr.slice(0, start - 1) + expr.slice(start);
-      setExpr(next);
-      window.requestAnimationFrame(() => {
-        el.focus();
-        el.setSelectionRange(start - 1, start - 1);
-      });
-    }
+    setExpr((prev) => prev.slice(0, -1));
   };
 
-  const runCalc = () => {
-    if (!expr.trim()) return;
+  const runCalc = (exprOverride?: string) => {
+    const target = (exprOverride ?? expr).trim();
+    if (!target) return;
     try {
-      const res = evaluateMathDetailed(expr);
+      const res = evaluateMathDetailed(target);
       setResult({ ok: true, decimal: res.decimal, fraction: res.fraction });
       setHistory((prev) => [
         {
-          expr,
+          expr: target,
           decimalStr: String(res.decimal),
           fraction: res.fraction,
         },
@@ -510,6 +476,33 @@ export function ScratchpadModal({
       setResult({ ok: false, err: (err as Error).message });
     }
   };
+
+  // Support physical desktop keyboard typing without opening mobile soft keyboard
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const normalized = normalizeMathLiveInput(e.key);
+      if (/^[0-9+\-*/^().]$/.test(normalized)) {
+        e.preventDefault();
+        setExpr((prev) => prev + normalized);
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        setExpr((prev) => prev.slice(0, -1));
+      } else if (e.key === 'Enter' || e.key === '=') {
+        e.preventDefault();
+        runCalc();
+      } else if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, expr]);
 
   const insertFractionFromBuilder = () => {
     const n = normalizeNum(fracNum);
@@ -566,16 +559,15 @@ export function ScratchpadModal({
     >
       <div className="space-y-3">
         <div className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-          می‌توانید مستقیم با کیبورد تایپ کنید (مثلاً <code dir="ltr">(2/3)^2 + 1/4</code> یا{' '}
-          <code dir="ltr">sqrt(144)</code>) یا از سازنده کسر و توان زیر استفاده کنید.
+          از دکمه‌های ماشین‌حساب زیر یا سازنده کسر و توان استفاده کنید (در کامپیوتر تایپ مستقیم نیز فعال است).
         </div>
 
-        {/* Expression Input + Live Formatted Math Preview */}
+        {/* Expression Display + Live Formatted Math Preview (readOnly so mobile keyboard never overlaps) */}
         <div className="rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 p-2.5 space-y-2">
           {expr.trim() && (
             <div
               dir="ltr"
-              className="px-2 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm sm:text-base font-bold text-slate-800 dark:text-slate-100 overflow-x-auto flex items-center justify-end min-h-[38px]"
+              className="px-2 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-sm sm:text-base font-bold text-slate-800 dark:text-slate-100 overflow-x-auto flex items-center justify-end min-h-[38px] [direction:ltr] [unicode-bidi:isolate]"
             >
               {renderMathPreview(expr)}
             </div>
@@ -583,18 +575,18 @@ export function ScratchpadModal({
 
           <div className="flex gap-2">
             <input
-              ref={inputRef}
               type="text"
+              readOnly
+              inputMode="none"
               dir="ltr"
               value={expr}
-              onChange={(e) => setExpr(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && runCalc()}
+              aria-label="عبارت محاسباتی"
               placeholder="(2/3)^2 + 1/6"
-              className="flex-1 min-w-0 min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 font-bold text-sm sm:text-base tabular-nums"
+              className="flex-1 min-w-0 min-h-[44px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 font-bold text-sm sm:text-base text-left [direction:ltr] [unicode-bidi:isolate] tabular-nums select-none cursor-default"
             />
             <button
               type="button"
-              onClick={runCalc}
+              onClick={() => runCalc()}
               className="min-h-[44px] inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shrink-0"
             >
               <Calculator className="w-4 h-4" />
@@ -693,9 +685,9 @@ export function ScratchpadModal({
                   dir="ltr"
                   placeholder="صورت"
                   value={fracNum}
-                  onChange={(e) => setFracNum(e.target.value)}
+                  onChange={(e) => setFracNum(normalizeMathLiveInput(e.target.value))}
                   onKeyDown={(e) => e.key === 'Enter' && insertFractionFromBuilder()}
-                  className="w-20 text-center py-1 px-1.5 text-sm font-bold rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  className="w-20 text-center [direction:ltr] [unicode-bidi:isolate] py-1 px-1.5 text-sm font-bold rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
                 />
                 <div className="w-full h-0.5 bg-slate-800 dark:bg-slate-200 my-1" />
                 <input
@@ -703,9 +695,9 @@ export function ScratchpadModal({
                   dir="ltr"
                   placeholder="مخرج"
                   value={fracDen}
-                  onChange={(e) => setFracDen(e.target.value)}
+                  onChange={(e) => setFracDen(normalizeMathLiveInput(e.target.value))}
                   onKeyDown={(e) => e.key === 'Enter' && insertFractionFromBuilder()}
-                  className="w-20 text-center py-1 px-1.5 text-sm font-bold rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  className="w-20 text-center [direction:ltr] [unicode-bidi:isolate] py-1 px-1.5 text-sm font-bold rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
                 />
               </div>
             </div>
@@ -727,17 +719,17 @@ export function ScratchpadModal({
                 type="text"
                 placeholder="پایه (مثلاً 2/3)"
                 value={powBase}
-                onChange={(e) => setPowBase(e.target.value)}
+                onChange={(e) => setPowBase(normalizeMathLiveInput(e.target.value))}
                 onKeyDown={(e) => e.key === 'Enter' && insertPowerFromBuilder()}
-                className="w-24 min-h-[40px] text-center py-1.5 px-2 text-sm font-bold rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900"
+                className="w-24 min-h-[40px] text-center [direction:ltr] [unicode-bidi:isolate] py-1.5 px-2 text-sm font-bold rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900"
               />
               <input
                 type="text"
                 placeholder="توان"
                 value={powExp}
-                onChange={(e) => setPowExp(e.target.value)}
+                onChange={(e) => setPowExp(normalizeMathLiveInput(e.target.value))}
                 onKeyDown={(e) => e.key === 'Enter' && insertPowerFromBuilder()}
-                className="w-16 -mt-1.5 text-center py-1 px-1.5 text-xs font-bold rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300"
+                className="w-16 -mt-1.5 text-center [direction:ltr] [unicode-bidi:isolate] py-1 px-1.5 text-xs font-bold rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300"
               />
             </div>
             <button
@@ -810,7 +802,7 @@ export function ScratchpadModal({
           </button>
           <button
             type="button"
-            onClick={runCalc}
+            onClick={() => runCalc()}
             className="min-h-[44px] py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-base"
           >
             =

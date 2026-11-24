@@ -14,7 +14,7 @@ import {
 import type { ChapterId, PracticeQuestion, SpeedChallengeRecord } from '../types/math';
 import { chaptersMeta } from '../data/mathData';
 import { generatePracticeSet } from '../data/dynamicQuestionGenerator';
-import { normalizeNum, toPersianDigits } from '../utils/mathHelpers';
+import { normalizeMathLiveInput, normalizeNum, toPersianDigits } from '../utils/mathHelpers';
 import { Frac, MathBox, BidiText } from './MathPrimitives';
 
 interface SpeedChallengePreset {
@@ -483,7 +483,7 @@ export function SpeedChallenge({
                     dir="ltr"
                     value={numVal}
                     onChange={(e) => {
-                      setNumVal(e.target.value);
+                      setNumVal(normalizeMathLiveInput(e.target.value));
                       if (inputWarn) setInputWarn('');
                     }}
                     onKeyDown={(e) => {
@@ -492,7 +492,7 @@ export function SpeedChallenge({
                         else denInputRef.current?.focus();
                       }
                     }}
-                    className="w-20 text-center py-1.5 px-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-bold"
+                    className="w-20 text-center [direction:ltr] [unicode-bidi:isolate] py-1.5 px-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-bold"
                   />
                   <div className="w-full h-0.5 bg-slate-800 dark:bg-slate-200 my-1.5" />
                   <input
@@ -502,13 +502,13 @@ export function SpeedChallenge({
                     dir="ltr"
                     value={denVal}
                     onChange={(e) => {
-                      setDenVal(e.target.value);
+                      setDenVal(normalizeMathLiveInput(e.target.value));
                       if (inputWarn) setInputWarn('');
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') handleSubmitCurrent();
                     }}
-                    className="w-20 text-center py-1.5 px-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-bold"
+                    className="w-20 text-center [direction:ltr] [unicode-bidi:isolate] py-1.5 px-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-bold"
                   />
                 </div>
               </div>
@@ -520,13 +520,13 @@ export function SpeedChallenge({
                 dir="ltr"
                 value={singleVal}
                 onChange={(e) => {
-                  setSingleVal(e.target.value);
+                  setSingleVal(normalizeMathLiveInput(e.target.value));
                   if (inputWarn) setInputWarn('');
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleSubmitCurrent();
                 }}
-                className="w-44 px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-base font-bold tabular-nums"
+                className="w-44 px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 text-base font-bold text-left [direction:ltr] [unicode-bidi:isolate] tabular-nums"
               />
             )}
 

@@ -78,7 +78,7 @@ import {
   type AudioCandidateItem,
   type LoadedAudioMap,
 } from '../utils/audioMatcher';
-import { areCourseAnswersEqual, toPersianDigits } from '../utils/mathHelpers';
+import { areCourseAnswersEqual, normalizeMathLiveInput, toPersianDigits } from '../utils/mathHelpers';
 import { BidiText } from './MathPrimitives';
 import { AudioTrackCard, speakEnglishText } from './AudioTrackPlayer';
 import {
@@ -1871,27 +1871,49 @@ export function CustomSubjectModule({
                         );
                       })}
                     </div>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      <input
-                        type="text"
-                        disabled={isLocked}
-                        value={inputs[key] || ''}
-                        onChange={(e) => setInputs((p) => ({ ...p, [key]: e.target.value }))}
-                        onKeyDown={(e) => e.key === 'Enter' && checkExercise(exBase)}
-                        className="flex-1 min-w-[180px] min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm disabled:opacity-60"
-                        placeholder={isAutoLocked ? 'این سؤال پس از ۳ اشتباه قفل شده است' : 'پاسخ خود را بنویسید...'}
-                      />
-                      <button
-                        type="button"
-                        disabled={isLocked}
-                        onClick={() => checkExercise(exBase)}
-                        className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs sm:text-sm font-bold"
-                      >
-                        بررسی
-                      </button>
-                    </div>
-                  )}
+                  ) : (() => {
+                    const expectsPersianWord = ex.acceptedAnswers.some((a) =>
+                      /[\u0621-\u064A\u067E\u0686\u0698\u06A9\u06AF\u06CC]/.test(a)
+                    );
+                    const forceLtr = !expectsPersianWord;
+                    return (
+                      <div className="flex flex-wrap gap-2">
+                        <input
+                          type="text"
+                          inputMode="text"
+                          dir={forceLtr ? 'ltr' : 'rtl'}
+                          disabled={isLocked}
+                          value={inputs[key] || ''}
+                          onChange={(e) => {
+                            const nextVal =
+                              isMathCourse && forceLtr
+                                ? normalizeMathLiveInput(e.target.value)
+                                : e.target.value;
+                            setInputs((p) => ({ ...p, [key]: nextVal }));
+                          }}
+                          onKeyDown={(e) => e.key === 'Enter' && checkExercise(exBase)}
+                          className={`flex-1 min-w-[180px] min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-sm font-bold disabled:opacity-60 ${
+                            forceLtr ? 'text-left [direction:ltr] [unicode-bidi:isolate] tabular-nums' : 'text-right'
+                          }`}
+                          placeholder={
+                            isAutoLocked
+                              ? 'این سؤال پس از ۳ اشتباه قفل شده است'
+                              : forceLtr && isMathCourse
+                              ? 'مثلاً -12 یا 3/4 ...'
+                              : 'پاسخ خود را بنویسید...'
+                          }
+                        />
+                        <button
+                          type="button"
+                          disabled={isLocked}
+                          onClick={() => checkExercise(exBase)}
+                          className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs sm:text-sm font-bold"
+                        >
+                          بررسی
+                        </button>
+                      </div>
+                    );
+                  })()}
 
                   {shownHints[key] && ex.hint && (
                     <div className="mt-2.5 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200">

@@ -23,6 +23,7 @@ import {
   Sparkles,
   Info,
   AlertTriangle,
+  FlaskConical,
 } from 'lucide-react';
 import appLogoUrl from './assets/images/app-logo.png';
 import type {
@@ -1049,7 +1050,9 @@ export default function App() {
                       : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-blue-400'
                   }`}
                 >
-                  {isMathCourse(cs) ? (
+                  {cs.category === 'science' ? (
+                    <FlaskConical className="w-4 h-4 shrink-0" />
+                  ) : isMathCourse(cs) ? (
                     <Calculator className="w-4 h-4 shrink-0" />
                   ) : (
                     <BookOpen className="w-4 h-4 shrink-0" />
@@ -1206,7 +1209,7 @@ export default function App() {
                   className="min-h-[44px] flex items-center gap-2 px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
                 >
                   <FileText className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0" />
-                  فرمول‌های ریاضی
+                  فرمول‌ها و روابط
                 </button>
                 <button
                   type="button"
@@ -1500,6 +1503,7 @@ export default function App() {
                       );
                       const studiedCount = Object.values(pr.lessonsStudied || {}).filter(Boolean).length;
                       const pct = totalLessons > 0 ? Math.round((studiedCount / totalLessons) * 100) : 0;
+                      const isScience = cs.category === 'science';
                       const isMath = isMathCourse(cs);
                       const isExtra = isExtracurricularCourse(cs);
 
@@ -1513,14 +1517,18 @@ export default function App() {
                               <div className="flex items-center gap-2.5 min-w-0">
                                 <div
                                   className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                                    isMath
+                                    isScience
+                                      ? 'bg-cyan-100 dark:bg-cyan-950/60 text-cyan-700 dark:text-cyan-300'
+                                      : isMath
                                       ? 'bg-teal-100 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300'
                                       : isExtra
                                       ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300'
                                       : 'bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300'
                                   }`}
                                 >
-                                  {isMath ? (
+                                  {isScience ? (
+                                    <FlaskConical className="w-5 h-5" />
+                                  ) : isMath ? (
                                     <Calculator className="w-5 h-5" />
                                   ) : isExtra ? (
                                     <Sparkles className="w-5 h-5" />

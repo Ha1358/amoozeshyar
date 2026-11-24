@@ -68,6 +68,7 @@ import {
   hasAudioSupport,
   isCatalogEntryExtracurricular,
   isExtracurricularCourse,
+  isMathCourse as hasCalculatorSupport,
   loadAvailableCourseCatalog,
   matchCatalogEntriesForProfile,
   parseCoursesFromLocalFiles,
@@ -953,7 +954,7 @@ export function CustomSubjectModule({
   const lesson = ch.lessons[lessonIdx] ?? ch.lessons[0];
   const dir = pkg.dir || 'rtl';
   const showAudio = hasAudioSupport(pkg);
-  const isMathCourse = pkg.category === 'math' || pkg.id.includes('math');
+  const isMathCourse = hasCalculatorSupport(pkg);
 
   const lessonBodySizeClass =
     lessonFontScale === 'xl'

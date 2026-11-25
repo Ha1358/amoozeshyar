@@ -72,6 +72,7 @@ import {
   isExtracurricularCourse,
   loadAvailableCourseCatalog,
   matchCatalogEntriesForProfile,
+  mergeCatalogEntries,
   parseCoursesFromLocalFiles,
   validateCoursePackage,
   type CatalogCourseEntry,
@@ -591,10 +592,11 @@ export function AddSubjectModal({
     try {
       localStorage.setItem(CATALOG_URL_STORAGE_KEY, clean);
       const valid = await fetchCatalogFromUrl(clean);
-      setCatalogEntries(valid);
+      const merged = mergeCatalogEntries(valid, BUILTIN_COURSE_CATALOG);
+      setCatalogEntries(merged);
       setMsg({
         ok: true,
-        text: `فهرست اینترنتی بروزرسانی شد (${toPersianDigits(valid.length)} بسته درسی).`,
+        text: `فهرست اینترنتی بروزرسانی شد (${toPersianDigits(merged.length)} بسته درسی).`,
       });
     } catch {
       setMsg({ ok: false, text: 'دریافت فهرست دروس از اینترنت ناموفق بود.' });

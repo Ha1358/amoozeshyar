@@ -162,8 +162,8 @@ export function AboutModal({
               dir="ltr"
               className="p-2.5 rounded-lg bg-slate-900 text-slate-100 text-[11px] overflow-x-auto text-left"
             >{`{
-  "version": "2.3.13",
-  "versionCode": 36,
+  "version": "2.3.14",
+  "versionCode": 37,
   "offlineHtmlUrl": "amoozeshyar-offline.html",
   "apkUrl": "https://github.com/Ha1358/amoozeshyar/releases/latest/download/amoozeshyar.apk",
   "notes": "توضیحات نسخه جدید"

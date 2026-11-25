@@ -15,8 +15,8 @@ const versionJson = fs.existsSync(versionJsonPath)
   ? JSON.parse(fs.readFileSync(versionJsonPath, 'utf8'))
   : {};
 
-const appVersion = String(pkgJson.version || versionJson.version || '2.3.13');
-const appVersionCode = Number(versionJson.versionCode || 36);
+const appVersion = String(pkgJson.version || versionJson.version || '2.3.14');
+const appVersionCode = Number(versionJson.versionCode || 37);
 
 function findFileRecursive(dir, targetNames) {
   if (!fs.existsSync(dir)) return null;

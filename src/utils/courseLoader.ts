@@ -240,10 +240,18 @@ export async function fetchCoursesFromUrl(
 }
 
 export async function fetchCatalogFromUrl(catalogUrl: string): Promise<CatalogCourseEntry[]> {
+  const cleanUrl = catalogUrl.trim();
+  const isRemoteHttp = /^https?:\/\//i.test(cleanUrl);
+  const fetchTarget = isRemoteHttp
+    ? cleanUrl.includes('?')
+      ? `${cleanUrl}&t=${Date.now()}`
+      : `${cleanUrl}?t=${Date.now()}`
+    : cleanUrl;
+
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = controller ? window.setTimeout(() => controller.abort(), 8000) : null;
   try {
-    const res = await fetch(catalogUrl.trim(), {
+    const res = await fetch(fetchTarget, {
       cache: 'no-store',
       signal: controller?.signal,
     });
@@ -546,32 +554,82 @@ export function matchCatalogEntriesForProfile(
   });
 }
 
+function compareCatalogVersions(a?: string, b?: string): number {
+  const pa = (a || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = (b || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const da = pa[i] ?? 0;
+    const db = pb[i] ?? 0;
+    if (da > db) return 1;
+    if (da < db) return -1;
+  }
+  return 0;
+}
+
+export function mergeCatalogEntries(
+  primary: CatalogCourseEntry[],
+  fallback: CatalogCourseEntry[] = BUILTIN_COURSE_CATALOG
+): CatalogCourseEntry[] {
+  const merged: CatalogCourseEntry[] = [...fallback];
+  for (const incoming of primary) {
+    const idx = merged.findIndex(
+      (b) => (incoming.id && b.id === incoming.id) || b.url.trim() === incoming.url.trim()
+    );
+    if (idx === -1) {
+      merged.push(incoming);
+    } else {
+      const base = merged[idx];
+      const useIncoming = compareCatalogVersions(incoming.version, base.version) >= 0;
+      merged[idx] = useIncoming
+        ? {
+            ...base,
+            ...incoming,
+            localPath: incoming.localPath || base.localPath,
+          }
+        : {
+            ...incoming,
+            ...base,
+            url: base.url || incoming.url,
+            localPath: base.localPath || incoming.localPath,
+          };
+    }
+  }
+  return merged;
+}
+
 export async function loadAvailableCourseCatalog(preferredUrl?: string): Promise<CatalogCourseEntry[]> {
   const isFileProto = typeof window !== 'undefined' && window.location.protocol === 'file:';
   const isOnline = typeof navigator === 'undefined' ? true : navigator.onLine;
   const targetRemote = (preferredUrl || DEFAULT_GITHUB_CATALOG_URL).trim();
 
-  if (isOnline && targetRemote) {
-    try {
-      const remoteEntries = await fetchCatalogFromUrl(targetRemote);
-      if (remoteEntries.length > 0) return remoteEntries;
-    } catch {
-      // Fallback to local catalog or built-in list
-    }
-  }
+  let baseCatalog: CatalogCourseEntry[] = BUILTIN_COURSE_CATALOG;
 
   if (!isFileProto) {
     try {
       const baseUrl = import.meta.env.BASE_URL || '/';
       const localCatalogUrl = `${baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`}catalog.json`;
       const localEntries = await fetchCatalogFromUrl(localCatalogUrl);
-      if (localEntries.length > 0) return localEntries;
+      if (localEntries.length > 0) {
+        baseCatalog = mergeCatalogEntries(localEntries, BUILTIN_COURSE_CATALOG);
+      }
     } catch {
-      // Fallback to built-in catalog
+      // Keep built-in catalog as base
     }
   }
 
-  return BUILTIN_COURSE_CATALOG;
+  if (isOnline && targetRemote) {
+    try {
+      const remoteEntries = await fetchCatalogFromUrl(targetRemote);
+      if (remoteEntries.length > 0) {
+        return mergeCatalogEntries(remoteEntries, baseCatalog);
+      }
+    } catch {
+      // Fallback to merged local/built-in catalog
+    }
+  }
+
+  return baseCatalog;
 }
 
 export async function autoLoadCoursesForProfile(

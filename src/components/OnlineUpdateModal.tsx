@@ -28,9 +28,9 @@ import {
 import { toPersianDigits } from '../utils/mathHelpers';
 import { triggerOfflineHtmlDownload } from './Modals';
 
-export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '2.3.13';
+export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '2.3.14';
 export const APK_VERSION_CODE =
-  typeof __APK_VERSION_CODE__ !== 'undefined' ? __APK_VERSION_CODE__ : 36;
+  typeof __APK_VERSION_CODE__ !== 'undefined' ? __APK_VERSION_CODE__ : 37;
 
 const REMOTE_UPDATE_URL_KEY = 'amoozeshyar_update_url_v1';
 const DEFAULT_PUBLIC_ORIGIN = 'https://ha1358.github.io/amoozeshyar';

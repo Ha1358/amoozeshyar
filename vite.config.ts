@@ -16,8 +16,8 @@ const versionJson = fs.existsSync(versionJsonPath)
       versionCode?: number;
     })
   : {};
-const APP_VERSION = pkgJson.version || versionJson.version || '2.3.12';
-const APK_VERSION_CODE = Number(versionJson.versionCode || 35);
+const APP_VERSION = pkgJson.version || versionJson.version || '2.3.13';
+const APK_VERSION_CODE = Number(versionJson.versionCode || 36);
 const rawBase = process.env.GITHUB_PAGES_BASE || '/';
 const PAGES_BASE = rawBase.endsWith('/') ? rawBase : `${rawBase}/`;
 

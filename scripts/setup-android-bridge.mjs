@@ -168,6 +168,7 @@ if (mainActivityPath.endsWith('.java')) {
 
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -180,6 +181,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
@@ -547,6 +549,51 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public String saveTextFile(String fileName, String content, String mimeType) {
+            if (fileName == null || content == null) return "";
+            String safeName = fileName.trim().replaceAll("[/\\\\?%*:|\"<>]", "_");
+            if (safeName.isEmpty()) safeName = "amoozeshyar-file.json";
+            String cleanMime = (mimeType != null && !mimeType.trim().isEmpty())
+                ? mimeType.split(";")[0].trim()
+                : "application/json";
+            byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.Downloads.DISPLAY_NAME, safeName);
+                    values.put(MediaStore.Downloads.MIME_TYPE, cleanMime);
+                    values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Amoozeshyar");
+                    Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    if (uri != null) {
+                        try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+                            if (out != null) {
+                                out.write(bytes);
+                                out.flush();
+                                return "Download/Amoozeshyar/" + safeName;
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+
+            try {
+                File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (dir == null) dir = getCacheDir();
+                if (!dir.exists()) dir.mkdirs();
+                File outFile = new File(dir, safeName);
+                try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                    fos.write(bytes);
+                    fos.flush();
+                }
+                return outFile.getAbsolutePath();
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
         public boolean installApkUpdate(String apkUrl) {
             return installApkUpdateForVersion(apkUrl, 0);
         }
@@ -746,6 +793,7 @@ public class MainActivity extends BridgeActivity {
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -754,6 +802,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.webkit.JavascriptInterface
 import androidx.activity.OnBackPressedCallback
@@ -764,6 +813,7 @@ import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
@@ -1079,6 +1129,48 @@ class MainActivity : BridgeActivity() {
         @JavascriptInterface
         fun hasCachedApkUpdateForVersion(apkUrl: String, targetVersionCode: Int): Boolean =
             isCachedApkReady(apkUrl, targetVersionCode.toLong())
+
+        @JavascriptInterface
+        fun saveTextFile(fileName: String?, content: String?, mimeType: String?): String {
+            if (fileName == null || content == null) return ""
+            var safeName = fileName.trim().replace(Regex("[/\\\\?%*:|\"<>]"), "_")
+            if (safeName.isEmpty()) safeName = "amoozeshyar-file.json"
+            val cleanMime = mimeType?.split(";")?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: "application/json"
+            val bytes = content.toByteArray(Charsets.UTF_8)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                        put(MediaStore.Downloads.MIME_TYPE, cleanMime)
+                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Amoozeshyar")
+                    }
+                    val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    if (uri != null) {
+                        contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(bytes)
+                            out.flush()
+                            return "Download/Amoozeshyar/$safeName"
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+            }
+
+            return try {
+                val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: cacheDir
+                if (!dir.exists()) dir.mkdirs()
+                val outFile = File(dir, safeName)
+                FileOutputStream(outFile).use { fos ->
+                    fos.write(bytes)
+                    fos.flush()
+                }
+                outFile.absolutePath
+            } catch (_: Exception) {
+                ""
+            }
+        }
 
         @JavascriptInterface
         fun installApkUpdate(apkUrl: String): Boolean = installApkUpdateForVersion(apkUrl, 0)

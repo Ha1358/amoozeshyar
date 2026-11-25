@@ -1,4 +1,4 @@
-import { useEffect, useState, type MutableRefObject } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import {
   Upload,
   Download,
@@ -62,9 +62,11 @@ import {
   BUILTIN_COURSE_CATALOG,
   COURSE_TEMPLATE_PACKAGE,
   DEFAULT_GITHUB_CATALOG_URL,
+  attachCourseProfileTags,
   courseMatchesProfile,
   fetchCatalogFromUrl,
   fetchCoursesFromUrl,
+  findBuiltinCatalogEntry,
   hasAudioSupport,
   isCatalogEntryExtracurricular,
   isExtracurricularCourse,
@@ -80,6 +82,7 @@ import {
   type LoadedAudioMap,
 } from '../utils/audioMatcher';
 import { areCourseAnswersEqual, normalizeMathLiveInput, toPersianDigits } from '../utils/mathHelpers';
+import { detectPlatformEnv, saveTextFileForUser } from '../utils/androidSupport';
 import { BidiText } from './MathPrimitives';
 import { AudioTrackCard, speakEnglishText } from './AudioTrackPlayer';
 import {
@@ -278,7 +281,7 @@ export function AddSubjectModal({
   const [mode, setMode] = useState<'local' | 'url'>(initialMode);
   const [markAsExtracurricular, setMarkAsExtracurricular] = useState(false);
   const [showOtherGrades, setShowOtherGrades] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string; showLocalPick?: boolean } | null>(null);
   const [urlInput, setUrlInput] = useState('');
   const [catalogUrl, setCatalogUrl] = useState(() => {
     try {
@@ -289,6 +292,7 @@ export function AddSubjectModal({
   });
   const [catalogEntries, setCatalogEntries] = useState<CatalogCourseEntry[]>(BUILTIN_COURSE_CATALOG);
   const [busy, setBusy] = useState(false);
+  const quickFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const profileCompleted = Boolean(userProfile && isProfileComplete(userProfile));
 
@@ -317,30 +321,37 @@ export function AddSubjectModal({
       ? courses.filter((c) => courseMatchesProfile(c, userProfile))
       : courses;
 
+  const buildLocalAssetUrl = (localPath?: string): string => {
+    if (!localPath) return '';
+    if (typeof window !== 'undefined' && window.location.protocol === 'file:') return '';
+    const baseUrl = import.meta.env.BASE_URL || '/';
+    const normalizedBase = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+    return `${normalizedBase}${localPath.replace(/^\/+/, '')}`;
+  };
+
   const handleDownloadTemplate = () => {
-    const blob = new Blob([JSON.stringify(COURSE_TEMPLATE_PACKAGE, null, 2)], {
-      type: 'application/json;charset=utf-8',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'amoozeshyar-course-template.json';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    const content = JSON.stringify(COURSE_TEMPLATE_PACKAGE, null, 2);
+    const saved = saveTextFileForUser('amoozeshyar-course-template.json', content);
+    if (!saved.ok) {
+      setMsg({
+        ok: false,
+        text: 'ذخیره فایل الگو با خطا مواجه شد.',
+      });
+      return;
+    }
     setMsg({
       ok: true,
-      text: 'فایل الگوی استاندارد (amoozeshyar-course-template.json) دانلود شد.',
+      text:
+        saved.usedNative && saved.savedLocation
+          ? `فایل الگو در مسیر ${saved.savedLocation} ذخیره شد.`
+          : 'فایل الگوی استاندارد (amoozeshyar-course-template.json) دانلود شد.',
     });
   };
 
   const fetchCatalogEntryText = async (entry: CatalogCourseEntry): Promise<string> => {
-    const isFileProto = typeof window !== 'undefined' && window.location.protocol === 'file:';
-    if (!isFileProto && entry.localPath) {
+    const localUrl = buildLocalAssetUrl(entry.localPath);
+    if (localUrl) {
       try {
-        const baseUrl = import.meta.env.BASE_URL || '/';
-        const localUrl = `${baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`}${entry.localPath.replace(/^\/+/, '')}`;
         const localRes = await fetch(localUrl, { cache: 'no-store' });
         if (localRes.ok) {
           return await localRes.text();
@@ -361,23 +372,23 @@ export function AddSubjectModal({
     setMsg(null);
     try {
       const text = await fetchCatalogEntryText(entry);
-      const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
       const fileSlug = entry.localPath?.split('/').pop() || `${entry.id || 'course'}.json`;
-      a.download = fileSlug;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      const saved = saveTextFileForUser(fileSlug, text);
+      if (!saved.ok) {
+        throw new Error('Save failed');
+      }
       setMsg({
         ok: true,
-        text: `فایل «${entry.title}» دانلود شد؛ می‌توانید از مسیر محلی نیز آن را وارد کنید.`,
+        showLocalPick: true,
+        text:
+          saved.usedNative && saved.savedLocation
+            ? `فایل «${entry.title}» در پوشه ${saved.savedLocation} ذخیره شد؛ با دکمه «انتخاب فایل» همین صفحه می‌توانید آن را اضافه کنید.`
+            : `فایل «${entry.title}» دانلود شد؛ با دکمه «انتخاب فایل» همین صفحه می‌توانید آن را وارد کنید.`,
       });
     } catch {
       setMsg({
         ok: false,
+        showLocalPick: true,
         text: 'دریافت فایل درسی ناموفق بود. اتصال اینترنت را بررسی کرده یا فایل محلی را انتخاب کنید.',
       });
     } finally {
@@ -398,9 +409,10 @@ export function AddSubjectModal({
         });
         return;
       }
-      const taggedCourses = markAsExtracurricular
-        ? res.courses.map((c) => ({ ...c, isExtracurricular: true }))
-        : res.courses;
+      const taggedCourses = res.courses.map((c) => {
+        const tagged = attachCourseProfileTags(c, userProfile);
+        return markAsExtracurricular ? { ...tagged, isExtracurricular: true } : tagged;
+      });
       onLoadedCourses(taggedCourses, res.audioCandidates, targetCourseId ? { targetCourseId } : undefined);
       setMsg({
         ok: true,
@@ -418,16 +430,102 @@ export function AddSubjectModal({
     }
   };
 
+  const handleInstallCatalogEntry = async (entry: CatalogCourseEntry, targetCourseId?: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const localUrl = buildLocalAssetUrl(entry.localPath);
+      const isOnline = typeof navigator === 'undefined' ? true : navigator.onLine;
+      const env = detectPlatformEnv();
+
+      const candidates: { url: string; timeoutMs: number; isLocal: boolean }[] = [];
+      if (env.isNativeApk && localUrl) {
+        if (isOnline && entry.url) {
+          candidates.push({ url: entry.url, timeoutMs: 4500, isLocal: false });
+        }
+        candidates.push({ url: localUrl, timeoutMs: 8000, isLocal: true });
+      } else if (isOnline && entry.url) {
+        candidates.push({ url: entry.url, timeoutMs: localUrl ? 5000 : 12000, isLocal: false });
+        if (localUrl) {
+          candidates.push({ url: localUrl, timeoutMs: 8000, isLocal: true });
+        }
+      } else if (localUrl) {
+        candidates.push({ url: localUrl, timeoutMs: 8000, isLocal: true });
+      } else if (entry.url) {
+        candidates.push({ url: entry.url, timeoutMs: 12000, isLocal: false });
+      }
+
+      let loadedCourses: CustomSubjectPackage[] = [];
+      let audioCandidates: AudioCandidateItem[] = [];
+      let usedLocalFallback = false;
+
+      for (const cand of candidates) {
+        if (!cand.url) continue;
+        if (!cand.isLocal && !isOnline) continue;
+        try {
+          const res = await fetchCoursesFromUrl(cand.url, cand.timeoutMs);
+          if (res.courses.length > 0) {
+            loadedCourses = res.courses.map((c) => {
+              const withCanonicalUrl = entry.url ? { ...c, sourceUrl: entry.url } : c;
+              const tagged = attachCourseProfileTags(withCanonicalUrl, userProfile, entry);
+              return markAsExtracurricular ? { ...tagged, isExtracurricular: true } : tagged;
+            });
+            audioCandidates = res.audioCandidates;
+            usedLocalFallback = cand.isLocal;
+            break;
+          }
+        } catch {
+          // Try next candidate
+        }
+      }
+
+      if (loadedCourses.length === 0) {
+        setMsg({
+          ok: false,
+          showLocalPick: true,
+          text: 'خطا در دریافت فایل از اینترنت و بسته آفلاین. اتصال شبکه را بررسی کرده یا فایل محلی را انتخاب کنید.',
+        });
+        return;
+      }
+
+      onLoadedCourses(
+        loadedCourses,
+        audioCandidates,
+        targetCourseId ? { targetCourseId } : undefined
+      );
+      setMsg({
+        ok: true,
+        text: targetCourseId
+          ? 'درس با حفظ تمام سوابق بروزرسانی شد.'
+          : usedLocalFallback
+          ? `درس «${entry.title}» از بسته آفلاین همراه برنامه با موفقیت نصب شد.`
+          : `درس «${entry.title}» با موفقیت نصب شد.`,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleFetchFromUrl = async (overrideUrl?: string, targetCourseId?: string) => {
     const clean = (typeof overrideUrl === 'string' ? overrideUrl : urlInput).trim();
     if (!clean) {
       setMsg({ ok: false, text: 'لطفاً آدرس اینترنتی فایل درس (.json یا .zip) را وارد کنید.' });
       return;
     }
+
+    const matchingCatalog =
+      catalogEntries.find((e) => e.url.trim() === clean || (targetCourseId && e.id === targetCourseId)) ||
+      (targetCourseId ? findBuiltinCatalogEntry({ id: targetCourseId }) : undefined);
+
+    if (matchingCatalog && matchingCatalog.url.trim() === clean) {
+      await handleInstallCatalogEntry(matchingCatalog, targetCourseId);
+      return;
+    }
+
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetchCoursesFromUrl(clean);
+      const res = await fetchCoursesFromUrl(clean, 10000);
       if (res.courses.length === 0) {
         setMsg({
           ok: false,
@@ -435,9 +533,10 @@ export function AddSubjectModal({
         });
         return;
       }
-      const taggedCourses = markAsExtracurricular
-        ? res.courses.map((c) => ({ ...c, isExtracurricular: true }))
-        : res.courses;
+      const taggedCourses = res.courses.map((c) => {
+        const tagged = attachCourseProfileTags(c, userProfile);
+        return markAsExtracurricular ? { ...tagged, isExtracurricular: true } : tagged;
+      });
       onLoadedCourses(taggedCourses, res.audioCandidates, targetCourseId ? { targetCourseId } : undefined);
       if (typeof overrideUrl !== 'string') setUrlInput('');
       setMsg({
@@ -450,9 +549,35 @@ export function AddSubjectModal({
         onClose();
       }
     } catch {
+      if (matchingCatalog?.localPath) {
+        const localUrl = buildLocalAssetUrl(matchingCatalog.localPath);
+        if (localUrl) {
+          try {
+            const localRes = await fetchCoursesFromUrl(localUrl, 8000);
+            if (localRes.courses.length > 0) {
+              const tagged = localRes.courses.map((c) =>
+                attachCourseProfileTags({ ...c, sourceUrl: clean }, userProfile, matchingCatalog)
+              );
+              onLoadedCourses(
+                tagged,
+                localRes.audioCandidates,
+                targetCourseId ? { targetCourseId } : undefined
+              );
+              setMsg({
+                ok: true,
+                text: 'درس از بسته آفلاین همراه برنامه با حفظ سوابق بروزرسانی شد.',
+              });
+              return;
+            }
+          } catch {
+            // Fall through to error message
+          }
+        }
+      }
       setMsg({
         ok: false,
-        text: 'خطا در دریافت فایل از اینترنت. آدرس، اتصال شبکه یا دسترسی CORS سرور را بررسی کنید.',
+        showLocalPick: true,
+        text: 'خطا در دریافت فایل از اینترنت. آدرس، اتصال شبکه یا دسترسی سرور را بررسی کنید یا فایل محلی را انتخاب کنید.',
       });
     } finally {
       setBusy(false);
@@ -486,6 +611,18 @@ export function AddSubjectModal({
       }}
       className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
     >
+      <input
+        ref={quickFileInputRef}
+        type="file"
+        multiple
+        disabled={busy}
+        accept=".json,.zip,application/json,application/zip"
+        onChange={(e) => {
+          void handleLocalSelection(e.target.files);
+          e.target.value = '';
+        }}
+        className="hidden"
+      />
       <div
         role="dialog"
         aria-modal="true"
@@ -514,6 +651,45 @@ export function AddSubjectModal({
           </button>
         </div>
 
+        {/* Pinned Mode Switcher + Quick Local Pick Bar */}
+        <div className="px-4 sm:px-5 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/80 flex flex-wrap items-center gap-2 shrink-0">
+          <div className="flex-1 min-w-[210px] grid grid-cols-2 gap-1 bg-slate-200/75 dark:bg-slate-800 p-1 rounded-xl text-xs">
+            <button
+              type="button"
+              onClick={() => setMode('local')}
+              className={`min-h-[36px] rounded-lg font-bold inline-flex items-center justify-center gap-1.5 ${
+                mode === 'local'
+                  ? 'bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-300 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              <span>از مسیر محلی</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('url')}
+              className={`min-h-[36px] rounded-lg font-bold inline-flex items-center justify-center gap-1.5 ${
+                mode === 'url'
+                  ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>از آدرس اینترنتی</span>
+            </button>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => quickFileInputRef.current?.click()}
+            className="min-h-[38px] px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>انتخاب فایل درس</span>
+          </button>
+        </div>
+
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4 text-xs sm:text-sm leading-relaxed">
           {/* Profile Filter Toggle */}
           {profileCompleted && (
@@ -532,34 +708,6 @@ export function AddSubjectModal({
               </label>
             </div>
           )}
-
-          {/* Source Mode Switcher */}
-          <div className="grid grid-cols-2 gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
-            <button
-              type="button"
-              onClick={() => setMode('local')}
-              className={`min-h-[40px] rounded-lg font-bold inline-flex items-center justify-center gap-1.5 ${
-                mode === 'local'
-                  ? 'bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-300 shadow-sm'
-                  : 'text-slate-600 dark:text-slate-300'
-              }`}
-            >
-              <FolderOpen className="w-4 h-4" />
-              <span>از مسیر محلی</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('url')}
-              className={`min-h-[40px] rounded-lg font-bold inline-flex items-center justify-center gap-1.5 ${
-                mode === 'url'
-                  ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-sm'
-                  : 'text-slate-600 dark:text-slate-300'
-              }`}
-            >
-              <Globe className="w-4 h-4" />
-              <span>از آدرس اینترنتی</span>
-            </button>
-          </div>
 
           {mode === 'local' ? (
             <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3">
@@ -703,7 +851,7 @@ export function AddSubjectModal({
                         <button
                           type="button"
                           disabled={busy}
-                          onClick={() => handleFetchFromUrl(entry.url)}
+                          onClick={() => handleInstallCatalogEntry(entry)}
                           className="min-h-[38px] px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-1"
                         >
                           <Globe className="w-3.5 h-3.5" />
@@ -802,22 +950,46 @@ export function AddSubjectModal({
             </div>
           )}
 
-          <button
-            type="button"
-            onClick={handleDownloadTemplate}
-            className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 font-semibold text-xs sm:text-sm"
-          >
-            <Download className="w-4 h-4 shrink-0" />
-            <span>دریافت فایل الگوی خام JSON برای ساخت بسته درسی جدید</span>
-          </button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => quickFileInputRef.current?.click()}
+              className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs sm:text-sm"
+            >
+              <Upload className="w-4 h-4 shrink-0" />
+              <span>انتخاب و افزودن فایل درس از حافظه (.json / .zip)</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadTemplate}
+              className="w-full min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 font-semibold text-xs sm:text-sm"
+            >
+              <Download className="w-4 h-4 shrink-0" />
+              <span>دریافت فایل الگوی خام JSON</span>
+            </button>
+          </div>
 
           {msg && (
             <div
-              className={`font-bold text-xs sm:text-sm ${
-                msg.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+              className={`p-3 rounded-xl border space-y-2 ${
+                msg.ok
+                  ? 'bg-emerald-50/80 dark:bg-emerald-950/35 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-red-50/80 dark:bg-red-950/35 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
               }`}
             >
-              {msg.text}
+              <div className="font-bold text-xs sm:text-sm">{msg.text}</div>
+              {msg.showLocalPick && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => quickFileInputRef.current?.click()}
+                  className="min-h-[38px] px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  <Upload className="w-3.5 h-3.5 shrink-0" />
+                  <span>انتخاب فایل دانلودشده از حافظه</span>
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1054,8 +1226,18 @@ export function CustomSubjectModule({
     }
     setUpdating(true);
     setUpdateNote(null);
+    const builtinMatch = findBuiltinCatalogEntry(pkg);
+    const baseUrl = import.meta.env.BASE_URL || '/';
+    const normalizedBase = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+    const localUrl =
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'file:' &&
+      builtinMatch?.localPath
+        ? `${normalizedBase}${builtinMatch.localPath.replace(/^\/+/, '')}`
+        : '';
+
     try {
-      const res = await fetchCoursesFromUrl(pkg.sourceUrl);
+      const res = await fetchCoursesFromUrl(pkg.sourceUrl, localUrl ? 5000 : 10000);
       if (res.courses.length === 0) {
         setUpdateNote({ ok: false, text: 'ساختار فایل دریافت‌شده معتبر نیست.' });
         return;
@@ -1066,6 +1248,24 @@ export function CustomSubjectModule({
         text: 'محتوای درس با حفظ تمام سوابق پیشرفت قبلی شما همگام‌سازی و بروزرسانی شد.',
       });
     } catch {
+      if (localUrl) {
+        try {
+          const localRes = await fetchCoursesFromUrl(localUrl, 8000);
+          if (localRes.courses.length > 0) {
+            onApplyCourseUpdate(
+              { ...localRes.courses[0], sourceUrl: pkg.sourceUrl },
+              localRes.audioCandidates
+            );
+            setUpdateNote({
+              ok: true,
+              text: 'محتوای درس از بسته آفلاین همراه برنامه با حفظ سوابق همگام‌سازی شد.',
+            });
+            return;
+          }
+        } catch {
+          // Fall through to error message
+        }
+      }
       setUpdateNote({ ok: false, text: 'خطا در همگام‌سازی آنلاین درس. اتصال اینترنت را بررسی کنید.' });
     } finally {
       setUpdating(false);

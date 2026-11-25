@@ -11,6 +11,7 @@ export interface NativeApkUpdateBridge {
   hasCachedApkUpdate?: (url: string) => boolean;
   hasCachedApkUpdateForVersion?: (url: string, targetVersionCode: number) => boolean;
   getInstalledVersionCode?: () => number;
+  saveTextFile?: (fileName: string, content: string, mimeType?: string) => string;
   exitApp?: () => void;
 }
 
@@ -162,6 +163,40 @@ export async function triggerOneClickApkDownload(
       ok: false,
       msg: 'شروع دریافت نسخه جدید با خطا روبرو شد. اتصال اینترنت و مجوز نصب را بررسی کنید.',
     };
+  }
+}
+
+export function saveTextFileForUser(
+  fileName: string,
+  content: string,
+  mimeType = 'application/json;charset=utf-8'
+): { ok: boolean; savedLocation?: string; usedNative?: boolean } {
+  const cleanName = (fileName || 'download.json').replace(/[/\\?%*:|"<>]/g, '_');
+  try {
+    const bridge = typeof window !== 'undefined' ? window.AmoozeshyarAndroid : undefined;
+    if (bridge?.saveTextFile) {
+      const savedPath = String(bridge.saveTextFile(cleanName, content, mimeType) || '').trim();
+      if (savedPath) {
+        return { ok: true, savedLocation: savedPath, usedNative: true };
+      }
+    }
+  } catch {
+    // Fallback to standard browser download
+  }
+
+  try {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = cleanName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+    return { ok: true, usedNative: false };
+  } catch {
+    return { ok: false };
   }
 }
 

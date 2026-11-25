@@ -74,6 +74,7 @@ import {
   detectPlatformEnv,
   performAndroidExit,
   requestPersistentStorage,
+  saveTextFileForUser,
   setupAndroidBackNavigation,
   triggerOneClickApkDownload,
 } from './utils/androidSupport';
@@ -686,17 +687,12 @@ export default function App() {
 
   const handleExportBackup = () => {
     const bundle = buildBackupBundle();
-    const blob = new Blob([JSON.stringify(bundle, null, 2)], {
-      type: 'application/json;charset=utf-8',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'amoozeshyar-backup.json';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    const res = saveTextFileForUser('amoozeshyar-backup.json', JSON.stringify(bundle, null, 2));
+    if (res.ok && res.usedNative && res.savedLocation) {
+      showToastMsg(true, `فایل پشتیبان در پوشه ${res.savedLocation} ذخیره شد.`);
+    } else if (!res.ok) {
+      showToastMsg(false, 'ذخیره فایل پشتیبان با خطا مواجه شد.');
+    }
   };
 
   const handleImportBackupFile = async (

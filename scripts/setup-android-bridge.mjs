@@ -555,7 +555,7 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public String saveTextFile(String fileName, String content, String mimeType) {
             if (fileName == null || content == null) return "";
-            String safeName = fileName.trim().replaceAll("[/\\\\?%*:|\"<>]", "_");
+            String safeName = fileName.trim().replaceAll("[/\\\\?%*:|<>]", "_").replace('"', '_');
             if (safeName.isEmpty()) safeName = "amoozeshyar-file.json";
             String cleanMime = (mimeType != null && !mimeType.trim().isEmpty())
                 ? mimeType.split(";")[0].trim()
@@ -1390,7 +1390,7 @@ class MainActivity : BridgeActivity() {
         @JavascriptInterface
         fun saveTextFile(fileName: String?, content: String?, mimeType: String?): String {
             if (fileName == null || content == null) return ""
-            var safeName = fileName.trim().replace(Regex("[/\\\\?%*:|\"<>]"), "_")
+            var safeName = fileName.trim().replace(Regex("[/\\\\?%*:|<>]"), "_").replace('"', '_')
             if (safeName.isEmpty()) safeName = "amoozeshyar-file.json"
             val cleanMime = mimeType?.split(";")?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
                 ?: "application/json"

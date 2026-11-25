@@ -12,6 +12,8 @@ export interface NativeApkUpdateBridge {
   hasCachedApkUpdateForVersion?: (url: string, targetVersionCode: number) => boolean;
   getInstalledVersionCode?: () => number;
   saveTextFile?: (fileName: string, content: string, mimeType?: string) => string;
+  openExternalUrl?: (url: string) => boolean;
+  cancelApkDownload?: () => void;
   exitApp?: () => void;
 }
 
@@ -82,21 +84,72 @@ export function checkNativeCachedApkUpdate(
   }
 }
 
+export function resolveFastApkUrl(apkUrl: string, remoteVersion?: string): string {
+  const cleanUrl = apkUrl.trim();
+  const ver = remoteVersion?.trim().replace(/^v/i, '');
+  if (cleanUrl && ver && cleanUrl.includes('/releases/latest/download/')) {
+    return cleanUrl.replace('/releases/latest/download/', `/releases/download/v${ver}/`);
+  }
+  return cleanUrl;
+}
+
+export function cancelNativeApkDownload(): void {
+  try {
+    if (typeof window !== 'undefined') {
+      window.AmoozeshyarAndroid?.cancelApkDownload?.();
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+export async function openUrlInExternalBrowser(url: string): Promise<boolean> {
+  const cleanUrl = url.trim();
+  if (!cleanUrl || typeof window === 'undefined') return false;
+  try {
+    if (window.AmoozeshyarAndroid?.openExternalUrl?.(cleanUrl)) {
+      return true;
+    }
+    const cap = (window as unknown as {
+      Capacitor?: {
+        Plugins?: {
+          Browser?: { open?: (opts: { url: string }) => Promise<void> };
+        };
+      };
+    }).Capacitor;
+    if (cap?.Plugins?.Browser?.open) {
+      await cap.Plugins.Browser.open({ url: cleanUrl });
+      return true;
+    }
+    const a = document.createElement('a');
+    a.href = cleanUrl;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function triggerOneClickApkDownload(
   apkUrl: string,
-  targetVersionCode?: number
+  targetVersionCode?: number,
+  remoteVersion?: string
 ): Promise<{
   ok: boolean;
   msg: string;
   usedNativeInstaller?: boolean;
 }> {
-  const cleanUrl = apkUrl.trim();
+  const cleanUrl = resolveFastApkUrl(apkUrl, remoteVersion);
   if (!cleanUrl) {
     return { ok: false, msg: 'آدرس دانلود فایل نصبی اندروید مشخص نشده است.' };
   }
 
   try {
-    // 1) Native Android Resumable/Cached Downloader + PackageInstaller Bridge
+    // 1) Native Android 6-Channel Resumable/Cached Downloader + PackageInstaller Bridge
     const bridge = typeof window !== 'undefined' ? window.AmoozeshyarAndroid : undefined;
     if (bridge) {
       if (

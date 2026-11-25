@@ -17,9 +17,12 @@ import {
 } from 'lucide-react';
 import type { AppBackupBundle } from '../types/courses';
 import {
+  cancelNativeApkDownload,
   checkNativeCachedApkUpdate,
   detectPlatformEnv,
   hasNativeApkInstallerBridge,
+  openUrlInExternalBrowser,
+  resolveFastApkUrl,
   triggerOneClickApkDownload,
 } from '../utils/androidSupport';
 import { toPersianDigits } from '../utils/mathHelpers';
@@ -142,7 +145,14 @@ export async function checkRemoteAppUpdate(targetUrl?: string): Promise<AppUpdat
       ? `${cleanTargetUrl}&t=${Date.now()}`
       : `${cleanTargetUrl}?t=${Date.now()}`;
 
-    const res = await fetch(fetchUrl, { cache: 'no-store' });
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? window.setTimeout(() => controller.abort(), 8000) : null;
+    let res: Response;
+    try {
+      res = await fetch(fetchUrl, { cache: 'no-store', signal: controller?.signal });
+    } finally {
+      if (timer !== null) window.clearTimeout(timer);
+    }
     if (res.ok) {
       const data = (await res.json()) as RemoteVersionPayload;
       const remoteV = (data.version || APP_VERSION).trim();
@@ -344,19 +354,24 @@ export function OnlineUpdateModal({
 
   const handleOneClickMobileApkUpdate = async () => {
     if (!appStatus.apkUrl) return;
+    const fastUrl = resolveFastApkUrl(appStatus.apkUrl, appStatus.remoteVersion);
     setDownloadingApk(true);
     setApkActionMsg(null);
     if (hasNativeBridge) {
-      const isCached = checkNativeCachedApkUpdate(appStatus.apkUrl, appStatus.remoteVersionCode);
+      const isCached = checkNativeCachedApkUpdate(fastUrl, appStatus.remoteVersionCode);
       setHasCachedApk(isCached);
       setApkProgress({
         percent: isCached ? 100 : 5,
         status: isCached
           ? 'نسخه جدید از قبل آماده است؛ در حال باز کردن پنجره نصب سیستم...'
-          : 'شروع دریافت و آماده‌سازی نصب خودکار داخل برنامه...',
+          : 'شروع دریافت سریع چندکاناله داخل برنامه...',
       });
     }
-    const res = await triggerOneClickApkDownload(appStatus.apkUrl, appStatus.remoteVersionCode);
+    const res = await triggerOneClickApkDownload(
+      fastUrl,
+      appStatus.remoteVersionCode,
+      appStatus.remoteVersion
+    );
     setApkActionMsg({ ok: res.ok, text: res.msg });
     if (!res.usedNativeInstaller || !res.ok) {
       setDownloadingApk(false);
@@ -500,10 +515,10 @@ export function OnlineUpdateModal({
                     )}
 
                     {apkProgress && (
-                      <div className="p-3 rounded-xl bg-white/85 dark:bg-slate-900/70 border border-emerald-200 dark:border-emerald-700 space-y-1.5">
-                        <div className="flex items-center justify-between text-xs font-bold tabular-nums">
-                          <span>{apkProgress.status}</span>
-                          <span>{toPersianDigits(apkProgress.percent)}٪</span>
+                      <div className="p-3 rounded-xl bg-white/85 dark:bg-slate-900/70 border border-emerald-200 dark:border-emerald-700 space-y-2">
+                        <div className="flex items-center justify-between gap-2 text-xs font-bold tabular-nums">
+                          <span className="leading-snug">{apkProgress.status}</span>
+                          <span className="shrink-0">{toPersianDigits(apkProgress.percent)}٪</span>
                         </div>
                         <div className="w-full h-2.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
                           <div
@@ -513,10 +528,38 @@ export function OnlineUpdateModal({
                             style={{ width: `${apkProgress.percent}%` }}
                           />
                         </div>
+                        {downloadingApk && hasNativeBridge && (
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                cancelNativeApkDownload();
+                                setDownloadingApk(false);
+                              }}
+                              className="min-h-[32px] px-3 py-1 rounded-lg border border-red-300 dark:border-red-700 text-red-700 dark:text-red-300 text-xs font-bold"
+                            >
+                              توقف دریافت
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
 
                     <div className="flex flex-wrap gap-2">
+                      {env.isNativeApk && appStatus.apkUrl && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void openUrlInExternalBrowser(
+                              resolveFastApkUrl(appStatus.apkUrl!, appStatus.remoteVersion)
+                            )
+                          }
+                          className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold"
+                        >
+                          <Download className="w-4 h-4 shrink-0" />
+                          <span>دانلود با مرورگر / دانلودمنیجر گوشی</span>
+                        </button>
+                      )}
                       {!env.isNativeApk && appStatus.apkUrl && (
                         <button
                           type="button"

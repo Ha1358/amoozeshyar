@@ -168,6 +168,7 @@ if (mainActivityPath.endsWith('.java')) {
 
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -180,6 +181,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
@@ -196,8 +198,11 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class MainActivity extends BridgeActivity {
     private boolean bridgeAttached = false;
@@ -205,6 +210,7 @@ public class MainActivity extends BridgeActivity {
     private String installAction;
     private final String installToken = UUID.randomUUID().toString();
     private final AtomicBoolean isDownloading = new AtomicBoolean(false);
+    private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
     private boolean receiverRegistered = false;
 
     private final BroadcastReceiver installReceiver = new BroadcastReceiver() {
@@ -547,8 +553,129 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
+        public String saveTextFile(String fileName, String content, String mimeType) {
+            if (fileName == null || content == null) return "";
+            String safeName = fileName.trim().replaceAll("[/\\\\?%*:|\"<>]", "_");
+            if (safeName.isEmpty()) safeName = "amoozeshyar-file.json";
+            String cleanMime = (mimeType != null && !mimeType.trim().isEmpty())
+                ? mimeType.split(";")[0].trim()
+                : "application/json";
+            byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.Downloads.DISPLAY_NAME, safeName);
+                    values.put(MediaStore.Downloads.MIME_TYPE, cleanMime);
+                    values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Amoozeshyar");
+                    Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    if (uri != null) {
+                        try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+                            if (out != null) {
+                                out.write(bytes);
+                                out.flush();
+                                return "Download/Amoozeshyar/" + safeName;
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+
+            try {
+                File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (dir == null) dir = getCacheDir();
+                if (!dir.exists()) dir.mkdirs();
+                File outFile = new File(dir, safeName);
+                try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                    fos.write(bytes);
+                    fos.flush();
+                }
+                return outFile.getAbsolutePath();
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public boolean openExternalUrl(String targetUrl) {
+            if (targetUrl == null || targetUrl.trim().isEmpty()) return false;
+            final String clean = targetUrl.trim();
+            runOnUiThread(() -> {
+                try {
+                    Intent viewIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(clean));
+                    viewIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(viewIntent);
+                } catch (Exception ignored) {
+                }
+            });
+            return true;
+        }
+
+        @JavascriptInterface
+        public void cancelApkDownload() {
+            cancelRequested.set(true);
+        }
+
+        @JavascriptInterface
         public boolean installApkUpdate(String apkUrl) {
             return installApkUpdateForVersion(apkUrl, 0);
+        }
+
+        private HttpURLConnection openHttpWithRedirects(String startUrl, String rangeHeader, int connectMs, int readMs) throws Exception {
+            String currentUrl = startUrl;
+            for (int hop = 0; hop < 8; hop++) {
+                URL url = new URL(currentUrl);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setInstanceFollowRedirects(false);
+                conn.setUseCaches(false);
+                conn.setConnectTimeout(connectMs);
+                conn.setReadTimeout(readMs);
+                conn.setRequestProperty("User-Agent", "Amoozeshyar-Android");
+                conn.setRequestProperty("Accept-Encoding", "identity");
+                conn.setRequestProperty("Connection", "keep-alive");
+                if (rangeHeader != null && !rangeHeader.isEmpty()) {
+                    conn.setRequestProperty("Range", rangeHeader);
+                }
+                int code = conn.getResponseCode();
+                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                    String next = conn.getHeaderField("Location");
+                    conn.disconnect();
+                    if (next == null || next.isEmpty()) return null;
+                    currentUrl = new URL(url, next).toString();
+                    continue;
+                }
+                return conn;
+            }
+            return null;
+        }
+
+        private String formatDownloadStatus(int pct, long downloaded, long total, long bytesPerSec) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("در حال دریافت نسخه جدید: ").append(pct).append("٪");
+            if (total > 0) {
+                double dlMb = downloaded / (1024.0 * 1024.0);
+                double totMb = total / (1024.0 * 1024.0);
+                sb.append(String.format(Locale.US, " (%.1f از %.1f مگابایت", dlMb, totMb));
+                if (bytesPerSec > 0) {
+                    if (bytesPerSec >= 1024L * 1024L) {
+                        sb.append(String.format(Locale.US, " · %.1f مگابایت/ثانیه", bytesPerSec / (1024.0 * 1024.0)));
+                    } else {
+                        sb.append(String.format(Locale.US, " · %d کیلوبایت/ثانیه", Math.max(1L, bytesPerSec / 1024L)));
+                    }
+                }
+                sb.append(")");
+            }
+            return sb.toString();
+        }
+
+        private void deleteChunkFiles(File dir) {
+            for (int i = 0; i < 8; i++) {
+                File cf = new File(dir, "amoozeshyar-update.seg" + i);
+                if (cf.exists()) cf.delete();
+            }
+            File cMeta = new File(dir, "amoozeshyar-update.chunks.meta");
+            if (cMeta.exists()) cMeta.delete();
         }
 
         @JavascriptInterface
@@ -576,129 +703,302 @@ public class MainActivity extends BridgeActivity {
             if (!isDownloading.compareAndSet(false, true)) {
                 return true;
             }
+            cancelRequested.set(false);
 
             new Thread(() -> {
-                HttpURLConnection conn = null;
+                HttpURLConnection probeConn = null;
                 try {
-                    String cleanUrl = apkUrl != null ? apkUrl.trim() : "";
-                    File dir = getUpdateDir();
-                    File finalFile = new File(dir, "amoozeshyar-update.apk");
-                    File finalMeta = new File(dir, "amoozeshyar-update.meta");
-                    File partFile = new File(dir, "amoozeshyar-update.apk.part");
-                    File partMeta = new File(dir, "amoozeshyar-update.part.meta");
+                    final String cleanUrl = apkUrl != null ? apkUrl.trim() : "";
+                    final File dir = getUpdateDir();
+                    final File finalFile = new File(dir, "amoozeshyar-update.apk");
+                    final File finalMeta = new File(dir, "amoozeshyar-update.meta");
+                    final File partFile = new File(dir, "amoozeshyar-update.apk.part");
+                    final File partMeta = new File(dir, "amoozeshyar-update.part.meta");
+                    final File chunksMeta = new File(dir, "amoozeshyar-update.chunks.meta");
 
-                    long existingPartLen = 0L;
-                    String existingEtag = "";
-                    String[] pMeta = readMetaFile(partMeta);
-                    if (partFile.exists() && partFile.length() > 0 && pMeta != null && cleanUrl.equals(pMeta[0].trim())) {
-                        long savedTarget = parseLongSafe(pMeta[2], 0L);
-                        if (targetVersionCode <= 0 || savedTarget == targetVersionCode) {
-                            existingPartLen = partFile.length();
-                            existingEtag = pMeta[3].trim();
-                        } else {
-                            partFile.delete();
-                            partMeta.delete();
-                        }
-                    } else if (partFile.exists()) {
-                        partFile.delete();
-                        partMeta.delete();
+                    emitProgress(5, "در حال اتصال و یافتن سریع‌ترین مسیر دریافت...", false, false);
+                    probeConn = openHttpWithRedirects(cleanUrl, "bytes=0-0", 12000, 15000);
+                    if (probeConn == null) {
+                        emitProgress(0, "اتصال به سرور بروزرسانی برقرار نشد.", false, true);
+                        return;
                     }
 
-                    emitProgress(5, existingPartLen > 0 ? "در حال ادامه دریافت نسخه جدید..." : "در حال اتصال به سرور بروزرسانی...", false, false);
-                    String currentUrl = cleanUrl;
-                    for (int hop = 0; hop < 8; hop++) {
-                        URL url = new URL(currentUrl);
-                        conn = (HttpURLConnection) url.openConnection();
-                        conn.setInstanceFollowRedirects(false);
-                        conn.setConnectTimeout(20000);
-                        conn.setReadTimeout(45000);
-                        conn.setRequestProperty("User-Agent", "Amoozeshyar-Android");
-                        conn.setRequestProperty("Accept-Encoding", "identity");
-                        if (existingPartLen > 0) {
-                            conn.setRequestProperty("Range", "bytes=" + existingPartLen + "-");
-                            if (!existingEtag.isEmpty()) {
-                                conn.setRequestProperty("If-Range", existingEtag);
+                    int probeCode = probeConn.getResponseCode();
+                    if (probeCode < 200 || probeCode >= 300) {
+                        emitProgress(0, "دریافت فایل از سرور ناموفق بود (کد " + probeCode + ").", false, true);
+                        return;
+                    }
+
+                    String resolvedCdnUrl = probeConn.getURL().toString();
+                    String etag = probeConn.getHeaderField("ETag");
+                    long total = -1L;
+
+                    if (probeCode == HttpURLConnection.HTTP_PARTIAL) {
+                        String cr = probeConn.getHeaderField("Content-Range");
+                        if (cr != null) {
+                            int slashIdx = cr.lastIndexOf('/');
+                            if (slashIdx > 0) {
+                                total = parseLongSafe(cr.substring(slashIdx + 1), -1L);
                             }
                         }
-                        int code = conn.getResponseCode();
-                        if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
-                            String next = conn.getHeaderField("Location");
-                            conn.disconnect();
-                            if (next == null || next.isEmpty()) break;
-                            currentUrl = new URL(url, next).toString();
-                            continue;
+                    } else {
+                        total = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+                            ? probeConn.getContentLengthLong()
+                            : probeConn.getContentLength();
+                    }
+
+                    if (probeCode == HttpURLConnection.HTTP_PARTIAL && total >= 524288L) {
+                        try {
+                            probeConn.disconnect();
+                        } catch (Exception ignored) {
                         }
-                        break;
-                    }
+                        probeConn = null;
 
-                    if (conn == null) {
-                        emitProgress(0, "دریافت فایل از سرور ناموفق بود.", false, true);
-                        return;
-                    }
-
-                    int respCode = conn.getResponseCode();
-                    if (respCode == 416 && existingPartLen > 0) {
-                        conn.disconnect();
-                        partFile.delete();
-                        partMeta.delete();
-                        isDownloading.set(false);
-                        installApkUpdateForVersion(cleanUrl, targetVersionCode);
-                        return;
-                    }
-                    if (respCode < 200 || respCode >= 300) {
-                        emitProgress(0, "دریافت فایل از سرور ناموفق بود (کد " + respCode + ").", false, true);
-                        return;
-                    }
-
-                    boolean isPartial = (respCode == HttpURLConnection.HTTP_PARTIAL) && existingPartLen > 0;
-                    long remainingLen = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
-                        ? conn.getContentLengthLong()
-                        : conn.getContentLength();
-                    long total = isPartial && remainingLen > 0
-                        ? existingPartLen + remainingLen
-                        : remainingLen;
-
-                    String contentRange = conn.getHeaderField("Content-Range");
-                    if (isPartial && contentRange != null) {
-                        int slashIdx = contentRange.lastIndexOf('/');
-                        if (slashIdx > 0) {
-                            long crTotal = parseLongSafe(contentRange.substring(slashIdx + 1), -1L);
-                            if (crTotal > 0) total = crTotal;
+                        final int chunkCount = total >= 2_000_000L ? 6 : 4;
+                        boolean canResumeChunks = false;
+                        String[] cMeta = readMetaFile(chunksMeta);
+                        if (cMeta != null && cMeta.length >= 5) {
+                            long metaTotal = parseLongSafe(cMeta[1], -1L);
+                            long metaTarget = parseLongSafe(cMeta[2], 0L);
+                            int metaChunks = (int) parseLongSafe(cMeta[4], 0L);
+                            String metaEtag = cMeta[3].trim();
+                            boolean etagMatch = (etag == null || etag.isEmpty() || metaEtag.isEmpty() || etag.equals(metaEtag));
+                            if (cleanUrl.equals(cMeta[0].trim())
+                                    && metaTotal == total
+                                    && (targetVersionCode <= 0 || metaTarget == targetVersionCode)
+                                    && metaChunks == chunkCount
+                                    && etagMatch) {
+                                canResumeChunks = true;
+                            }
                         }
-                    }
 
-                    String etag = conn.getHeaderField("ETag");
-                    if (!isPartial) {
-                        existingPartLen = 0L;
-                    }
-                    writeMetaFile(partMeta, cleanUrl, total, targetVersionCode, etag);
-
-                    try (BufferedInputStream in = new BufferedInputStream(conn.getInputStream(), 65536);
-                         BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(partFile, isPartial), 65536)) {
-                        byte[] buf = new byte[65536];
-                        long downloaded = existingPartLen;
-                        int lastPct = total > 0 ? (int) Math.min(99, (downloaded * 100L) / total) : 5;
-                        if (isPartial && lastPct > 5) {
-                            emitProgress(lastPct, "ادامه دریافت نسخه جدید: " + lastPct + "٪", false, false);
+                        if (!canResumeChunks) {
+                            deleteChunkFiles(dir);
+                            String chunkContent = cleanUrl + "\\n" + total + "\\n" + targetVersionCode + "\\n"
+                                + (etag != null ? etag : "") + "\\n" + chunkCount;
+                            try (FileOutputStream fos = new FileOutputStream(chunksMeta)) {
+                                fos.write(chunkContent.getBytes(StandardCharsets.UTF_8));
+                            } catch (Exception ignored) {
+                            }
                         }
-                        int read;
-                        while ((read = in.read(buf)) != -1) {
-                            out.write(buf, 0, read);
-                            downloaded += read;
-                            if (total > 0) {
-                                int pct = (int) Math.min(99, (downloaded * 100L) / total);
-                                if (pct >= lastPct + 2) {
-                                    lastPct = pct;
-                                    emitProgress(pct, "در حال دریافت نسخه جدید: " + pct + "٪", false, false);
+
+                        final long[] starts = new long[chunkCount];
+                        final long[] ends = new long[chunkCount];
+                        final File[] segFiles = new File[chunkCount];
+                        long alreadyBytes = 0L;
+                        for (int i = 0; i < chunkCount; i++) {
+                            starts[i] = (total * i) / chunkCount;
+                            ends[i] = (i == chunkCount - 1) ? (total - 1L) : ((total * (i + 1L)) / chunkCount - 1L);
+                            long expectedLen = ends[i] - starts[i] + 1L;
+                            segFiles[i] = new File(dir, "amoozeshyar-update.seg" + i);
+                            if (segFiles[i].exists() && segFiles[i].length() > expectedLen) {
+                                segFiles[i].delete();
+                            }
+                            if (segFiles[i].exists()) {
+                                alreadyBytes += segFiles[i].length();
+                            }
+                        }
+
+                        final long finalTotal = total;
+                        final AtomicLong downloadedAtomic = new AtomicLong(alreadyBytes);
+                        final AtomicLong speedWindowBytes = new AtomicLong(0L);
+                        final AtomicLong speedWindowStartMs = new AtomicLong(System.currentTimeMillis());
+                        final AtomicLong lastEmitMs = new AtomicLong(0L);
+                        final AtomicBoolean chunkFailed = new AtomicBoolean(false);
+                        final AtomicReference<String> activeUrlRef = new AtomicReference<>(resolvedCdnUrl);
+                        final Object progressLock = new Object();
+                        final int[] lastPctHolder = new int[] {
+                            (int) Math.min(99, Math.max(5, (alreadyBytes * 100L) / finalTotal))
+                        };
+
+                        if (alreadyBytes > 0) {
+                            emitProgress(lastPctHolder[0], "ادامه دریافت سریع (" + chunkCount + " کانال هم‌زمان): " + lastPctHolder[0] + "٪", false, false);
+                        }
+
+                        Thread[] workers = new Thread[chunkCount];
+                        for (int i = 0; i < chunkCount; i++) {
+                            final int segIdx = i;
+                            final long segStart = starts[i];
+                            final long segEnd = ends[i];
+                            final long segExpected = segEnd - segStart + 1L;
+                            final File segFile = segFiles[i];
+
+                            workers[i] = new Thread(() -> {
+                                for (int attempt = 0; attempt < 3; attempt++) {
+                                    if (cancelRequested.get() || chunkFailed.get()) return;
+                                    HttpURLConnection segConn = null;
+                                    try {
+                                        long existing = segFile.exists() ? segFile.length() : 0L;
+                                        if (existing >= segExpected) return;
+
+                                        long reqStart = segStart + existing;
+                                        String target = attempt == 0 ? activeUrlRef.get() : cleanUrl;
+                                        segConn = openHttpWithRedirects(target, "bytes=" + reqStart + "-" + segEnd, 12000, 15000);
+                                        if (segConn == null) {
+                                            if (attempt < 2) continue;
+                                            chunkFailed.set(true);
+                                            return;
+                                        }
+                                        int code = segConn.getResponseCode();
+                                        if ((code == 403 || code == 410) && !cleanUrl.equals(target)) {
+                                            segConn.disconnect();
+                                            segConn = openHttpWithRedirects(cleanUrl, "bytes=" + reqStart + "-" + segEnd, 12000, 15000);
+                                            if (segConn == null) {
+                                                if (attempt < 2) continue;
+                                                chunkFailed.set(true);
+                                                return;
+                                            }
+                                            code = segConn.getResponseCode();
+                                            activeUrlRef.set(segConn.getURL().toString());
+                                        }
+                                        if (code != HttpURLConnection.HTTP_PARTIAL && !(code == HttpURLConnection.HTTP_OK && reqStart == 0L)) {
+                                            if (attempt < 2) continue;
+                                            chunkFailed.set(true);
+                                            return;
+                                        }
+
+                                        try (BufferedInputStream in = new BufferedInputStream(segConn.getInputStream(), 131072);
+                                             BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(segFile, existing > 0L), 131072)) {
+                                            byte[] buf = new byte[131072];
+                                            long written = existing;
+                                            int read;
+                                            while (written < segExpected && (read = in.read(buf)) != -1) {
+                                                if (cancelRequested.get()) {
+                                                    out.flush();
+                                                    return;
+                                                }
+                                                int toWrite = (int) Math.min((long) read, segExpected - written);
+                                                if (toWrite <= 0) break;
+                                                out.write(buf, 0, toWrite);
+                                                written += toWrite;
+                                                long dl = downloadedAtomic.addAndGet(toWrite);
+                                                long winBytes = speedWindowBytes.addAndGet(toWrite);
+                                                long now = System.currentTimeMillis();
+                                                int pct = (int) Math.min(99, (dl * 100L) / finalTotal);
+                                                synchronized (progressLock) {
+                                                    if (now - lastEmitMs.get() >= 450L || pct >= lastPctHolder[0] + 3) {
+                                                        long elapsed = Math.max(1L, now - speedWindowStartMs.get());
+                                                        long speed = (winBytes * 1000L) / elapsed;
+                                                        if (elapsed >= 3000L) {
+                                                            speedWindowStartMs.set(now);
+                                                            speedWindowBytes.set(0L);
+                                                        }
+                                                        lastEmitMs.set(now);
+                                                        lastPctHolder[0] = Math.max(lastPctHolder[0], pct);
+                                                        emitProgress(lastPctHolder[0], formatDownloadStatus(lastPctHolder[0], dl, finalTotal, speed), false, false);
+                                                    }
+                                                }
+                                            }
+                                            out.flush();
+                                        }
+                                        if (segFile.length() >= segExpected) return;
+                                    } catch (Exception ignored) {
+                                        if (attempt >= 2) {
+                                            chunkFailed.set(true);
+                                        }
+                                    } finally {
+                                        if (segConn != null) segConn.disconnect();
+                                    }
+                                }
+                                if (!segFile.exists() || segFile.length() < segExpected) {
+                                    chunkFailed.set(true);
+                                }
+                            });
+                            workers[i].start();
+                        }
+
+                        for (Thread w : workers) {
+                            try {
+                                w.join();
+                            } catch (InterruptedException ignored) {
+                            }
+                        }
+
+                        if (cancelRequested.get()) {
+                            emitProgress(0, "دریافت متوقف شد؛ پیشرفت ذخیره شده و با تلاش مجدد ادامه می‌یابد.", false, true);
+                            return;
+                        }
+
+                        long verifiedSum = 0L;
+                        boolean allOk = !chunkFailed.get();
+                        for (int i = 0; i < chunkCount; i++) {
+                            long expectedLen = ends[i] - starts[i] + 1L;
+                            if (!segFiles[i].exists() || segFiles[i].length() != expectedLen) {
+                                allOk = false;
+                                break;
+                            }
+                            verifiedSum += segFiles[i].length();
+                        }
+
+                        if (!allOk || verifiedSum != finalTotal) {
+                            emitProgress(0, "دریافت فایل نیمه‌تمام ماند؛ با زدن دوباره دکمه، از ادامه بخش‌های دریافت‌شده دانلود می‌شود.", false, true);
+                            return;
+                        }
+
+                        emitProgress(99, "دریافت کامل شد؛ در حال ترکیب و بررسی نهایی فایل...", false, false);
+                        if (partFile.exists()) partFile.delete();
+                        try (BufferedOutputStream mergedOut = new BufferedOutputStream(new FileOutputStream(partFile, false), 262144)) {
+                            byte[] mBuf = new byte[262144];
+                            for (int i = 0; i < chunkCount; i++) {
+                                try (BufferedInputStream segIn = new BufferedInputStream(new FileInputStream(segFiles[i]), 262144)) {
+                                    int r;
+                                    while ((r = segIn.read(mBuf)) != -1) {
+                                        mergedOut.write(mBuf, 0, r);
+                                    }
                                 }
                             }
+                            mergedOut.flush();
                         }
-                        out.flush();
-                    }
+                        deleteChunkFiles(dir);
+                    } else {
+                        // Single-stream fallback (if server does not support Range or file is tiny)
+                        long existingPartLen = 0L;
+                        String[] pMeta = readMetaFile(partMeta);
+                        if (probeCode == HttpURLConnection.HTTP_OK) {
+                            if (partFile.exists()) partFile.delete();
+                            partMeta.delete();
+                        } else if (partFile.exists() && pMeta != null && cleanUrl.equals(pMeta[0].trim())) {
+                            existingPartLen = partFile.length();
+                        }
+                        writeMetaFile(partMeta, cleanUrl, total, targetVersionCode, etag);
 
-                    if (total > 0 && partFile.length() != total) {
-                        emitProgress(0, "دریافت فایل نیمه‌تمام ماند؛ با زدن دوباره دکمه، از ادامه همین فایل دانلود می‌شود.", false, true);
-                        return;
+                        try (BufferedInputStream in = new BufferedInputStream(probeConn.getInputStream(), 131072);
+                             BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(partFile, false), 131072)) {
+                            byte[] buf = new byte[131072];
+                            long downloaded = existingPartLen;
+                            long winBytes = 0L;
+                            long winStart = System.currentTimeMillis();
+                            long lastEmit = 0L;
+                            int lastPct = 5;
+                            int read;
+                            while ((read = in.read(buf)) != -1) {
+                                if (cancelRequested.get()) {
+                                    emitProgress(0, "دریافت متوقف شد.", false, true);
+                                    return;
+                                }
+                                out.write(buf, 0, read);
+                                downloaded += read;
+                                winBytes += read;
+                                long now = System.currentTimeMillis();
+                                if (total > 0 && (now - lastEmit >= 450L)) {
+                                    int pct = (int) Math.min(99, (downloaded * 100L) / total);
+                                    long elapsed = Math.max(1L, now - winStart);
+                                    long speed = (winBytes * 1000L) / elapsed;
+                                    if (elapsed >= 3000L) {
+                                        winStart = now;
+                                        winBytes = 0L;
+                                    }
+                                    lastEmit = now;
+                                    lastPct = Math.max(lastPct, pct);
+                                    emitProgress(lastPct, formatDownloadStatus(lastPct, downloaded, total, speed), false, false);
+                                }
+                            }
+                            out.flush();
+                        }
+                        if (total > 0 && partFile.length() != total) {
+                            emitProgress(0, "دریافت فایل نیمه‌تمام ماند؛ لطفاً دوباره امتحان کنید.", false, true);
+                            return;
+                        }
                     }
 
                     PackageInfo archiveInfo = getPackageManager().getPackageArchiveInfo(partFile.getAbsolutePath(), 0);
@@ -711,9 +1011,9 @@ public class MainActivity extends BridgeActivity {
 
                     if (finalFile.exists()) finalFile.delete();
                     if (!partFile.renameTo(finalFile)) {
-                        try (BufferedInputStream copyIn = new BufferedInputStream(new FileInputStream(partFile), 65536);
-                             BufferedOutputStream copyOut = new BufferedOutputStream(new FileOutputStream(finalFile), 65536)) {
-                            byte[] cpBuf = new byte[65536];
+                        try (BufferedInputStream copyIn = new BufferedInputStream(new FileInputStream(partFile), 262144);
+                             BufferedOutputStream copyOut = new BufferedOutputStream(new FileOutputStream(finalFile), 262144)) {
+                            byte[] cpBuf = new byte[262144];
                             int cpRead;
                             while ((cpRead = copyIn.read(cpBuf)) != -1) {
                                 copyOut.write(cpBuf, 0, cpRead);
@@ -730,7 +1030,7 @@ public class MainActivity extends BridgeActivity {
                     emitProgress(0, "خطا در دریافت فایل نصبی؛ پیشرفت دانلود ذخیره شد و با تلاش مجدد ادامه می‌یابد.", false, true);
                 } finally {
                     isDownloading.set(false);
-                    if (conn != null) conn.disconnect();
+                    if (probeConn != null) probeConn.disconnect();
                 }
             }).start();
 
@@ -746,6 +1046,7 @@ public class MainActivity extends BridgeActivity {
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -754,6 +1055,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.webkit.JavascriptInterface
 import androidx.activity.OnBackPressedCallback
@@ -764,10 +1066,14 @@ import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 class MainActivity : BridgeActivity() {
     private var bridgeAttached = false
@@ -775,6 +1081,7 @@ class MainActivity : BridgeActivity() {
     private var installAction = ""
     private val installToken = UUID.randomUUID().toString()
     private val isDownloading = AtomicBoolean(false)
+    private val cancelRequested = AtomicBoolean(false)
     private var receiverRegistered = false
 
     private val installReceiver = object : BroadcastReceiver() {
@@ -1081,7 +1388,127 @@ class MainActivity : BridgeActivity() {
             isCachedApkReady(apkUrl, targetVersionCode.toLong())
 
         @JavascriptInterface
+        fun saveTextFile(fileName: String?, content: String?, mimeType: String?): String {
+            if (fileName == null || content == null) return ""
+            var safeName = fileName.trim().replace(Regex("[/\\\\?%*:|\"<>]"), "_")
+            if (safeName.isEmpty()) safeName = "amoozeshyar-file.json"
+            val cleanMime = mimeType?.split(";")?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                ?: "application/json"
+            val bytes = content.toByteArray(Charsets.UTF_8)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                        put(MediaStore.Downloads.MIME_TYPE, cleanMime)
+                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Amoozeshyar")
+                    }
+                    val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    if (uri != null) {
+                        contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(bytes)
+                            out.flush()
+                            return "Download/Amoozeshyar/$safeName"
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+            }
+
+            return try {
+                val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: cacheDir
+                if (!dir.exists()) dir.mkdirs()
+                val outFile = File(dir, safeName)
+                FileOutputStream(outFile).use { fos ->
+                    fos.write(bytes)
+                    fos.flush()
+                }
+                outFile.absolutePath
+            } catch (_: Exception) {
+                ""
+            }
+        }
+
+        @JavascriptInterface
+        fun openExternalUrl(targetUrl: String?): Boolean {
+            val clean = targetUrl?.trim() ?: ""
+            if (clean.isEmpty()) return false
+            runOnUiThread {
+                try {
+                    val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(clean)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(viewIntent)
+                } catch (_: Exception) {
+                }
+            }
+            return true
+        }
+
+        @JavascriptInterface
+        fun cancelApkDownload() {
+            cancelRequested.set(true)
+        }
+
+        @JavascriptInterface
         fun installApkUpdate(apkUrl: String): Boolean = installApkUpdateForVersion(apkUrl, 0)
+
+        private fun openHttpWithRedirects(startUrl: String, rangeHeader: String?, connectMs: Int, readMs: Int): HttpURLConnection? {
+            var currentUrl = startUrl
+            for (hop in 0 until 8) {
+                val url = URL(currentUrl)
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = false
+                    useCaches = false
+                    connectTimeout = connectMs
+                    readTimeout = readMs
+                    setRequestProperty("User-Agent", "Amoozeshyar-Android")
+                    setRequestProperty("Accept-Encoding", "identity")
+                    setRequestProperty("Connection", "keep-alive")
+                    if (!rangeHeader.isNullOrEmpty()) {
+                        setRequestProperty("Range", rangeHeader)
+                    }
+                }
+                val code = conn.responseCode
+                if (code in listOf(301, 302, 303, 307, 308)) {
+                    val next = conn.getHeaderField("Location")
+                    conn.disconnect()
+                    if (next.isNullOrEmpty()) return null
+                    currentUrl = URL(url, next).toString()
+                    continue
+                }
+                return conn
+            }
+            return null
+        }
+
+        private fun formatDownloadStatus(pct: Int, downloaded: Long, total: Long, bytesPerSec: Long): String {
+            val sb = StringBuilder()
+            sb.append("در حال دریافت نسخه جدید: ").append(pct).append("٪")
+            if (total > 0) {
+                val dlMb = downloaded / (1024.0 * 1024.0)
+                val totMb = total / (1024.0 * 1024.0)
+                sb.append(String.format(Locale.US, " (%.1f از %.1f مگابایت", dlMb, totMb))
+                if (bytesPerSec > 0) {
+                    if (bytesPerSec >= 1024L * 1024L) {
+                        sb.append(String.format(Locale.US, " · %.1f مگابایت/ثانیه", bytesPerSec / (1024.0 * 1024.0)))
+                    } else {
+                        sb.append(String.format(Locale.US, " · %d کیلوبایت/ثانیه", maxOf(1L, bytesPerSec / 1024L)))
+                    }
+                }
+                sb.append(")")
+            }
+            return sb.toString()
+        }
+
+        private fun deleteChunkFiles(dir: File) {
+            for (i in 0 until 8) {
+                val cf = File(dir, "amoozeshyar-update.seg$i")
+                if (cf.exists()) cf.delete()
+            }
+            val cMeta = File(dir, "amoozeshyar-update.chunks.meta")
+            if (cMeta.exists()) cMeta.delete()
+        }
 
         @JavascriptInterface
         fun installApkUpdateForVersion(apkUrl: String, targetVersionCode: Int): Boolean {
@@ -1107,9 +1534,10 @@ class MainActivity : BridgeActivity() {
             if (!isDownloading.compareAndSet(false, true)) {
                 return true
             }
+            cancelRequested.set(false)
 
             Thread {
-                var conn: HttpURLConnection? = null
+                var probeConn: HttpURLConnection? = null
                 try {
                     val cleanUrl = apkUrl.trim()
                     val dir = getUpdateDir()
@@ -1117,120 +1545,286 @@ class MainActivity : BridgeActivity() {
                     val finalMeta = File(dir, "amoozeshyar-update.meta")
                     val partFile = File(dir, "amoozeshyar-update.apk.part")
                     val partMeta = File(dir, "amoozeshyar-update.part.meta")
+                    val chunksMeta = File(dir, "amoozeshyar-update.chunks.meta")
 
-                    var existingPartLen = 0L
-                    var existingEtag = ""
-                    val pMeta = readMetaFile(partMeta)
-                    if (partFile.exists() && partFile.length() > 0 && pMeta != null && cleanUrl == pMeta[0].trim()) {
-                        val savedTarget = pMeta[2].trim().toLongOrNull() ?: 0L
-                        if (targetVersionCode <= 0 || savedTarget == targetVersionCode.toLong()) {
-                            existingPartLen = partFile.length()
-                            existingEtag = pMeta[3].trim()
-                        } else {
-                            partFile.delete()
-                            partMeta.delete()
-                        }
-                    } else if (partFile.exists()) {
-                        partFile.delete()
-                        partMeta.delete()
+                    emitProgress(5, "در حال اتصال و یافتن سریع‌ترین مسیر دریافت...", false, false)
+                    probeConn = openHttpWithRedirects(cleanUrl, "bytes=0-0", 12000, 15000)
+                    if (probeConn == null) {
+                        emitProgress(0, "اتصال به سرور بروزرسانی برقرار نشد.", false, true)
+                        return@Thread
                     }
 
-                    emitProgress(5, if (existingPartLen > 0) "در حال ادامه دریافت نسخه جدید..." else "در حال اتصال به سرور بروزرسانی...", false, false)
-                    var currentUrl = cleanUrl
-                    for (hop in 0 until 8) {
-                        val url = URL(currentUrl)
-                        conn = (url.openConnection() as HttpURLConnection).apply {
-                            instanceFollowRedirects = false
-                            connectTimeout = 20000
-                            readTimeout = 45000
-                            setRequestProperty("User-Agent", "Amoozeshyar-Android")
-                            setRequestProperty("Accept-Encoding", "identity")
-                            if (existingPartLen > 0) {
-                                setRequestProperty("Range", "bytes=$existingPartLen-")
-                                if (existingEtag.isNotEmpty()) {
-                                    setRequestProperty("If-Range", existingEtag)
-                                }
+                    val probeCode = probeConn.responseCode
+                    if (probeCode !in 200..299) {
+                        emitProgress(0, "دریافت فایل از سرور ناموفق بود (کد $probeCode).", false, true)
+                        return@Thread
+                    }
+
+                    val resolvedCdnUrl = probeConn.url.toString()
+                    val etag = probeConn.getHeaderField("ETag")
+                    var total = -1L
+
+                    if (probeCode == HttpURLConnection.HTTP_PARTIAL) {
+                        val cr = probeConn.getHeaderField("Content-Range")
+                        if (cr != null) {
+                            val slashIdx = cr.lastIndexOf('/')
+                            if (slashIdx > 0) {
+                                total = cr.substring(slashIdx + 1).trim().toLongOrNull() ?: -1L
                             }
                         }
-                        val code = conn.responseCode
-                        if (code in listOf(301, 302, 303, 307, 308)) {
-                            val next = conn.getHeaderField("Location")
-                            conn.disconnect()
-                            if (next.isNullOrEmpty()) break
-                            currentUrl = URL(url, next).toString()
-                            continue
-                        }
-                        break
-                    }
-
-                    val activeConn = conn
-                    if (activeConn == null) {
-                        emitProgress(0, "دریافت فایل از سرور ناموفق بود.", false, true)
-                        return@Thread
-                    }
-
-                    val respCode = activeConn.responseCode
-                    if (respCode == 416 && existingPartLen > 0) {
-                        activeConn.disconnect()
-                        partFile.delete()
-                        partMeta.delete()
-                        isDownloading.set(false)
-                        installApkUpdateForVersion(cleanUrl, targetVersionCode)
-                        return@Thread
-                    }
-                    if (respCode !in 200..299) {
-                        emitProgress(0, "دریافت فایل از سرور ناموفق بود (کد $respCode).", false, true)
-                        return@Thread
-                    }
-
-                    val isPartial = respCode == HttpURLConnection.HTTP_PARTIAL && existingPartLen > 0
-                    val remainingLen = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        activeConn.contentLengthLong
                     } else {
-                        activeConn.contentLength.toLong()
-                    }
-                    var total = if (isPartial && remainingLen > 0) existingPartLen + remainingLen else remainingLen
-                    val contentRange = activeConn.getHeaderField("Content-Range")
-                    if (isPartial && contentRange != null) {
-                        val slashIdx = contentRange.lastIndexOf('/')
-                        if (slashIdx > 0) {
-                            val crTotal = contentRange.substring(slashIdx + 1).trim().toLongOrNull() ?: -1L
-                            if (crTotal > 0) total = crTotal
+                        total = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            probeConn.contentLengthLong
+                        } else {
+                            probeConn.contentLength.toLong()
                         }
                     }
 
-                    val etag = activeConn.getHeaderField("ETag")
-                    if (!isPartial) existingPartLen = 0L
-                    writeMetaFile(partMeta, cleanUrl, total, targetVersionCode.toLong(), etag)
+                    if (probeCode == HttpURLConnection.HTTP_PARTIAL && total >= 524288L) {
+                        try {
+                            probeConn.disconnect()
+                        } catch (_: Exception) {
+                        }
+                        probeConn = null
 
-                    BufferedInputStream(activeConn.inputStream, 65536).use { input ->
-                        BufferedOutputStream(FileOutputStream(partFile, isPartial), 65536).use { output ->
-                            val buf = ByteArray(65536)
-                            var downloaded = existingPartLen
-                            var lastPct = if (total > 0) ((downloaded * 100L) / total).toInt().coerceAtMost(99) else 5
-                            if (isPartial && lastPct > 5) {
-                                emitProgress(lastPct, "ادامه دریافت نسخه جدید: $lastPct٪", false, false)
+                        val chunkCount = if (total >= 2_000_000L) 6 else 4
+                        var canResumeChunks = false
+                        val cMeta = readMetaFile(chunksMeta)
+                        if (cMeta != null && cMeta.size >= 5) {
+                            val metaTotal = cMeta[1].trim().toLongOrNull() ?: -1L
+                            val metaTarget = cMeta[2].trim().toLongOrNull() ?: 0L
+                            val metaChunks = cMeta[4].trim().toIntOrNull() ?: 0
+                            val metaEtag = cMeta[3].trim()
+                            val etagMatch = etag.isNullOrEmpty() || metaEtag.isEmpty() || etag == metaEtag
+                            if (cleanUrl == cMeta[0].trim() &&
+                                metaTotal == total &&
+                                (targetVersionCode <= 0 || metaTarget == targetVersionCode.toLong()) &&
+                                metaChunks == chunkCount &&
+                                etagMatch
+                            ) {
+                                canResumeChunks = true
                             }
-                            while (true) {
-                                val read = input.read(buf)
-                                if (read == -1) break
-                                output.write(buf, 0, read)
-                                downloaded += read
-                                if (total > 0) {
-                                    val pct = ((downloaded * 100L) / total).toInt().coerceAtMost(99)
-                                    if (pct >= lastPct + 2) {
-                                        lastPct = pct
-                                        emitProgress(pct, "در حال دریافت نسخه جدید: $pct٪", false, false)
+                        }
+
+                        if (!canResumeChunks) {
+                            deleteChunkFiles(dir)
+                            val metaText = cleanUrl + "\\n" + total + "\\n" + targetVersionCode + "\\n" + (etag ?: "") + "\\n" + chunkCount
+                            try {
+                                chunksMeta.writeText(metaText, Charsets.UTF_8)
+                            } catch (_: Exception) {
+                            }
+                        }
+
+                        val starts = LongArray(chunkCount)
+                        val ends = LongArray(chunkCount)
+                        val segFiles = Array(chunkCount) { i -> File(dir, "amoozeshyar-update.seg$i") }
+                        var alreadyBytes = 0L
+                        for (i in 0 until chunkCount) {
+                            starts[i] = (total * i) / chunkCount
+                            ends[i] = if (i == chunkCount - 1) total - 1L else (total * (i + 1L)) / chunkCount - 1L
+                            val expectedLen = ends[i] - starts[i] + 1L
+                            if (segFiles[i].exists() && segFiles[i].length() > expectedLen) {
+                                segFiles[i].delete()
+                            }
+                            if (segFiles[i].exists()) {
+                                alreadyBytes += segFiles[i].length()
+                            }
+                        }
+
+                        val downloadedAtomic = AtomicLong(alreadyBytes)
+                        val speedWindowBytes = AtomicLong(0L)
+                        val speedWindowStartMs = AtomicLong(System.currentTimeMillis())
+                        val lastEmitMs = AtomicLong(0L)
+                        val chunkFailed = AtomicBoolean(false)
+                        val activeUrlRef = AtomicReference(resolvedCdnUrl)
+                        val progressLock = Any()
+                        var lastPct = ((alreadyBytes * 100L) / total).toInt().coerceIn(5, 99)
+
+                        if (alreadyBytes > 0) {
+                            emitProgress(lastPct, "ادامه دریافت سریع ($chunkCount کانال هم‌زمان): $lastPct٪", false, false)
+                        }
+
+                        val workers = Array(chunkCount) { i ->
+                            val segStart = starts[i]
+                            val segEnd = ends[i]
+                            val segExpected = segEnd - segStart + 1L
+                            val segFile = segFiles[i]
+                            Thread {
+                                for (attempt in 0 until 3) {
+                                    if (cancelRequested.get() || chunkFailed.get()) return@Thread
+                                    var segConn: HttpURLConnection? = null
+                                    try {
+                                        val existing = if (segFile.exists()) segFile.length() else 0L
+                                        if (existing >= segExpected) return@Thread
+
+                                        val reqStart = segStart + existing
+                                        val target = if (attempt == 0) activeUrlRef.get() else cleanUrl
+                                        segConn = openHttpWithRedirects(target, "bytes=$reqStart-$segEnd", 12000, 15000)
+                                        if (segConn == null) {
+                                            if (attempt < 2) continue
+                                            chunkFailed.set(true)
+                                            return@Thread
+                                        }
+                                        var code = segConn.responseCode
+                                        if ((code == 403 || code == 410) && cleanUrl != target) {
+                                            segConn.disconnect()
+                                            segConn = openHttpWithRedirects(cleanUrl, "bytes=$reqStart-$segEnd", 12000, 15000)
+                                            if (segConn == null) {
+                                                if (attempt < 2) continue
+                                                chunkFailed.set(true)
+                                                return@Thread
+                                            }
+                                            code = segConn.responseCode
+                                            activeUrlRef.set(segConn.url.toString())
+                                        }
+                                        if (code != HttpURLConnection.HTTP_PARTIAL && !(code == HttpURLConnection.HTTP_OK && reqStart == 0L)) {
+                                            if (attempt < 2) continue
+                                            chunkFailed.set(true)
+                                            return@Thread
+                                        }
+
+                                        BufferedInputStream(segConn.inputStream, 131072).use { input ->
+                                            BufferedOutputStream(FileOutputStream(segFile, existing > 0L), 131072).use { output ->
+                                                val buf = ByteArray(131072)
+                                                var written = existing
+                                                while (written < segExpected) {
+                                                    val read = input.read(buf)
+                                                    if (read == -1) break
+                                                    if (cancelRequested.get()) {
+                                                        output.flush()
+                                                        return@Thread
+                                                    }
+                                                    val toWrite = minOf(read.toLong(), segExpected - written).toInt()
+                                                    if (toWrite <= 0) break
+                                                    output.write(buf, 0, toWrite)
+                                                    written += toWrite
+                                                    val dl = downloadedAtomic.addAndGet(toWrite.toLong())
+                                                    val winBytes = speedWindowBytes.addAndGet(toWrite.toLong())
+                                                    val now = System.currentTimeMillis()
+                                                    val pct = ((dl * 100L) / total).toInt().coerceAtMost(99)
+                                                    synchronized(progressLock) {
+                                                        if (now - lastEmitMs.get() >= 450L || pct >= lastPct + 3) {
+                                                            val elapsed = maxOf(1L, now - speedWindowStartMs.get())
+                                                            val speed = (winBytes * 1000L) / elapsed
+                                                            if (elapsed >= 3000L) {
+                                                                speedWindowStartMs.set(now)
+                                                                speedWindowBytes.set(0L)
+                                                            }
+                                                            lastEmitMs.set(now)
+                                                            lastPct = maxOf(lastPct, pct)
+                                                            emitProgress(lastPct, formatDownloadStatus(lastPct, dl, total, speed), false, false)
+                                                        }
+                                                    }
+                                                }
+                                                output.flush()
+                                            }
+                                        }
+                                        if (segFile.length() >= segExpected) return@Thread
+                                    } catch (_: Exception) {
+                                        if (attempt >= 2) {
+                                            chunkFailed.set(true)
+                                        }
+                                    } finally {
+                                        segConn?.disconnect()
+                                    }
+                                }
+                                if (!segFile.exists() || segFile.length() < segExpected) {
+                                    chunkFailed.set(true)
+                                }
+                            }.also { it.start() }
+                        }
+
+                        for (w in workers) {
+                            try {
+                                w.join()
+                            } catch (_: InterruptedException) {
+                            }
+                        }
+
+                        if (cancelRequested.get()) {
+                            emitProgress(0, "دریافت متوقف شد؛ پیشرفت ذخیره شده و با تلاش مجدد ادامه می‌یابد.", false, true)
+                            return@Thread
+                        }
+
+                        var verifiedSum = 0L
+                        var allOk = !chunkFailed.get()
+                        for (i in 0 until chunkCount) {
+                            val expectedLen = ends[i] - starts[i] + 1L
+                            if (!segFiles[i].exists() || segFiles[i].length() != expectedLen) {
+                                allOk = false
+                                break
+                            }
+                            verifiedSum += segFiles[i].length()
+                        }
+
+                        if (!allOk || verifiedSum != total) {
+                            emitProgress(0, "دریافت فایل نیمه‌تمام ماند؛ با زدن دوباره دکمه، از ادامه بخش‌های دریافت‌شده دانلود می‌شود.", false, true)
+                            return@Thread
+                        }
+
+                        emitProgress(99, "دریافت کامل شد؛ در حال ترکیب و بررسی نهایی فایل...", false, false)
+                        if (partFile.exists()) partFile.delete()
+                        BufferedOutputStream(FileOutputStream(partFile, false), 262144).use { mergedOut ->
+                            val mBuf = ByteArray(262144)
+                            for (i in 0 until chunkCount) {
+                                BufferedInputStream(FileInputStream(segFiles[i]), 262144).use { segIn ->
+                                    while (true) {
+                                        val r = segIn.read(mBuf)
+                                        if (r == -1) break
+                                        mergedOut.write(mBuf, 0, r)
                                     }
                                 }
                             }
-                            output.flush()
+                            mergedOut.flush()
                         }
-                    }
+                        deleteChunkFiles(dir)
+                    } else {
+                        if (probeCode == HttpURLConnection.HTTP_OK) {
+                            if (partFile.exists()) partFile.delete()
+                            partMeta.delete()
+                        }
+                        writeMetaFile(partMeta, cleanUrl, total, targetVersionCode.toLong(), etag)
 
-                    if (total > 0 && partFile.length() != total) {
-                        emitProgress(0, "دریافت فایل نیمه‌تمام ماند؛ با زدن دوباره دکمه، از ادامه همین فایل دانلود می‌شود.", false, true)
-                        return@Thread
+                        BufferedInputStream(probeConn.inputStream, 131072).use { input ->
+                            BufferedOutputStream(FileOutputStream(partFile, false), 131072).use { output ->
+                                val buf = ByteArray(131072)
+                                var downloaded = 0L
+                                var winBytes = 0L
+                                var winStart = System.currentTimeMillis()
+                                var lastEmit = 0L
+                                var lastPct = 5
+                                while (true) {
+                                    val read = input.read(buf)
+                                    if (read == -1) break
+                                    if (cancelRequested.get()) {
+                                        emitProgress(0, "دریافت متوقف شد.", false, true)
+                                        return@Thread
+                                    }
+                                    output.write(buf, 0, read)
+                                    downloaded += read
+                                    winBytes += read
+                                    val now = System.currentTimeMillis()
+                                    if (total > 0 && now - lastEmit >= 450L) {
+                                        val pct = ((downloaded * 100L) / total).toInt().coerceAtMost(99)
+                                        val elapsed = maxOf(1L, now - winStart)
+                                        val speed = (winBytes * 1000L) / elapsed
+                                        if (elapsed >= 3000L) {
+                                            winStart = now
+                                            winBytes = 0L
+                                        }
+                                        lastEmit = now
+                                        lastPct = maxOf(lastPct, pct)
+                                        emitProgress(lastPct, formatDownloadStatus(lastPct, downloaded, total, speed), false, false)
+                                    }
+                                }
+                                output.flush()
+                            }
+                        }
+
+                        if (total > 0 && partFile.length() != total) {
+                            emitProgress(0, "دریافت فایل نیمه‌تمام ماند؛ لطفاً دوباره امتحان کنید.", false, true)
+                            return@Thread
+                        }
                     }
 
                     val archiveInfo = packageManager.getPackageArchiveInfo(partFile.absolutePath, 0)
@@ -1243,9 +1837,9 @@ class MainActivity : BridgeActivity() {
 
                     if (finalFile.exists()) finalFile.delete()
                     if (!partFile.renameTo(finalFile)) {
-                        BufferedInputStream(FileInputStream(partFile), 65536).use { copyIn ->
-                            BufferedOutputStream(FileOutputStream(finalFile), 65536).use { copyOut ->
-                                val cpBuf = ByteArray(65536)
+                        BufferedInputStream(FileInputStream(partFile), 262144).use { copyIn ->
+                            BufferedOutputStream(FileOutputStream(finalFile), 262144).use { copyOut ->
+                                val cpBuf = ByteArray(262144)
                                 while (true) {
                                     val cpRead = copyIn.read(cpBuf)
                                     if (cpRead == -1) break
@@ -1264,7 +1858,7 @@ class MainActivity : BridgeActivity() {
                     emitProgress(0, "خطا در دریافت فایل نصبی؛ پیشرفت دانلود ذخیره شد و با تلاش مجدد ادامه می‌یابد.", false, true)
                 } finally {
                     isDownloading.set(false)
-                    conn?.disconnect()
+                    probeConn?.disconnect()
                 }
             }.start()
 

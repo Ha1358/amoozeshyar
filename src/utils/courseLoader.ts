@@ -183,12 +183,26 @@ export async function parseCoursesFromLocalFiles(
   return { courses, backupBundle, audioCandidates, skippedFiles };
 }
 
-export async function fetchCoursesFromUrl(targetUrl: string): Promise<{
+export async function fetchCoursesFromUrl(
+  targetUrl: string,
+  timeoutMs = 10000
+): Promise<{
   courses: CustomSubjectPackage[];
   audioCandidates: AudioCandidateItem[];
 }> {
   const cleanUrl = targetUrl.trim();
-  const res = await fetch(cleanUrl, { cache: 'no-store' });
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer =
+    controller && timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+  let res: Response;
+  try {
+    res = await fetch(cleanUrl, {
+      cache: 'no-store',
+      signal: controller?.signal,
+    });
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
   const contentType = (res.headers.get('content-type') || '').toLowerCase();
@@ -306,7 +320,7 @@ function isAefCourseId(id?: string): boolean {
 }
 
 export function findBuiltinCatalogEntry(
-  pkg?: Pick<CustomSubjectPackage, 'id' | 'title' | 'category'> | null
+  pkg?: Partial<Pick<CustomSubjectPackage, 'id' | 'title' | 'category'>> | null
 ): CatalogCourseEntry | undefined {
   if (!pkg) return undefined;
   const exact = BUILTIN_COURSE_CATALOG.find((c) => c.id === pkg.id);
